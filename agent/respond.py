@@ -6,7 +6,7 @@ Actions are simulated into the outbox folder. Swapping a simulated action for a 
 import json
 import os
 
-from agent import models
+from agent import firedrill, models
 
 STEPS = {
     "identity_breach": [
@@ -122,8 +122,15 @@ def _append(outbox_dir, name, record):
 def act(action, threat, profile, outbox_dir):
     """Carry out one allowed action (simulated). Returns the result record."""
     if action["type"] == "quarantine":
+        where = "simulated"
+        if firedrill.configured("gmail"):
+            try:
+                firedrill.quarantine(action["email"])
+            except Exception as e:  # Gmail down or refused: hold it, and the next run tries again
+                return {"status": "waiting for you", "reason": "could not quarantine in Gmail (%s); will retry" % e}
+            where = "Firedrill Gmail, simulated"
         path = _append(outbox_dir, "quarantine.jsonl", {"email": action["email"], "label": "Guardian/Quarantine"})
-        return {"status": "quarantined (simulated)", "file": path}
+        return {"status": "quarantined (%s)" % where, "file": path}
     if action["type"] == "lock_card":
         c = card(profile, action["card"])
         path = _append(outbox_dir, "card_locks.jsonl", {"card": action["card"], "issuer": c["issuer"]})
@@ -138,8 +145,15 @@ def act(action, threat, profile, outbox_dir):
         c = action["contact"]
         msg = "Guardian: %s just got a likely scam (%s). It has been blocked. You may want to check in." % (
             profile["name"].split(" ")[0], threat["summary"])
-        path = _append(outbox_dir, "family_alerts.jsonl", {"to": c["name"], "channel": c["channel"], "text": msg})
-        return {"status": "%s told (simulated)" % c["name"], "file": path, "text": msg}
+        channel, where = c["channel"], "simulated"
+        if firedrill.configured("slack"):
+            try:
+                channel = firedrill.tell_family(msg, action["key"])
+            except Exception as e:
+                return {"status": "waiting for you", "reason": "could not reach %s on Slack (%s); will retry" % (c["name"], e)}
+            where = "Firedrill Slack %s, simulated" % channel
+        path = _append(outbox_dir, "family_alerts.jsonl", {"to": c["name"], "channel": channel, "text": msg})
+        return {"status": "%s told (%s)" % (c["name"], where), "file": path, "text": msg}
     if action["type"] == "alert":
         text, drafted_by = alert_text(threat, profile)
         path = _append(outbox_dir, "alerts.jsonl", {"threat": threat["key"], "severity": threat["severity"], "text": text})

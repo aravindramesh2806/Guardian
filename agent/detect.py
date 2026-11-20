@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime, timedelta
 
-from agent import models
+from agent import firedrill, models
 
 DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
@@ -218,16 +218,33 @@ def card_misuse(profile, transactions, receipts):
     return out
 
 
-def all_threats(data_dir=None, senior=None):
-    """Run every detector over the person's data."""
+def _source(service, remote, local_name, data_dir, errors):
+    """Read from Firedrill when it is set up, else the local file. A Firedrill failure skips that source
+    (and is reported) rather than silently reading local demo data in its place."""
+    if not firedrill.configured(service):
+        return load(local_name, data_dir)
+    try:
+        return remote()
+    except Exception as e:
+        errors.append("could not read %s: %s" % (service, e))
+        return []
+
+
+def all_threats(data_dir=None, senior=None, errors=None):
+    """Run every detector over the person's data. Inbox and charges come from Firedrill when it is set up.
+
+    Sources that could not be read are appended to `errors`.
+    """
+    errors = [] if errors is None else errors
     profile = load("profile.json", data_dir)
     receipts = load("receipts.json", data_dir)
-    inbox = load("inbox.json", data_dir)
+    inbox = _source("gmail", firedrill.inbox, "inbox.json", data_dir, errors)
+    transactions = _source("stripe", lambda: firedrill.transactions(profile), "transactions.json", data_dir, errors)
     found = (breaches(profile, load("breaches.json", data_dir), receipts)
              + takeover(profile, inbox)
              + phishing(profile, inbox)
              + scam_calls(profile, load("calls.json", data_dir), senior)
-             + card_misuse(profile, load("transactions.json", data_dir), receipts))
+             + card_misuse(profile, transactions, receipts))
     # Most urgent first: things a scammer is doing right now, then money, then accounts, then news.
     severity = {"high": 0, "medium": 1}
     urgency = {"scam_call": 0, "card_misuse": 1, "takeover": 2, "phishing": 3, "suspicious": 4,

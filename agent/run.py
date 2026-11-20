@@ -58,7 +58,8 @@ def handle(threat, ctx):
             "summary": threat["summary"], "evidence": threat["evidence"], "new": is_new, "actions": outcomes}
 
 
-def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None):
+def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None, overrides=None):
+    """One pass. `overrides` sets gates from the person's own words (agent/drill.py), e.g. approving a dispute."""
     run_id = "run-" + time.strftime("%Y%m%d-%H%M%S") + "-%04d" % (int(time.time() * 1000) % 10000)
     run_dir = run_dir or os.path.join(ROOT, "runs")
     ctx = {
@@ -71,10 +72,16 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
         "verification": detect.load("verification.json", data_dir),
     }
     ctx["flags"] = flags.snapshot(detect.load("gates.json", data_dir), ctx["profile"], check=gate_check)
+    for gate, value in (overrides or {}).items():
+        ctx["flags"][gate] = {"value": value, "source": "you said so"}
     ctx["gates"] = flags.values(ctx["flags"])
     ctx["log"].gates = ctx["gates"]
     ctx["log"].event("gates", "check_gates", {}, ctx["flags"], "run")
-    results = [handle(t, ctx) for t in detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"])]
+    errors = []
+    threats = detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"], errors=errors)
+    for e in errors:
+        ctx["log"].event("detect", "source_error", {}, {"error": e}, "run")
+    results = [handle(t, ctx) for t in threats]
 
     def count(pred):
         return sum(1 for r in results for a in r["actions"] if pred(a))
@@ -82,11 +89,12 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
         "run_id": run_id, "store": ctx["store"].name, "persona": ctx["verification"].get("result"),
         "threats": len(results), "new_threats": sum(1 for r in results if r["new"]),
         "stopped": count(lambda a: a["action"] in ("quarantine", "lock_card", "dispute", "block_number")
-                         and a["status"].endswith("(simulated)")),
-        "alerts": count(lambda a: a["action"] == "alert" and a["status"].endswith("(simulated)")),
-        "family_told": count(lambda a: a["action"] == "notify_trusted" and a["status"].endswith("(simulated)")),
+                         and a["status"].endswith("simulated)")),
+        "alerts": count(lambda a: a["action"] == "alert" and a["status"].endswith("simulated)")),
+        "family_told": count(lambda a: a["action"] == "notify_trusted" and a["status"].endswith("simulated)")),
         "waiting_for_you": count(lambda a: a["status"] == "waiting for you"),
         "gates": ctx["flags"],
+        "source_errors": errors,
         "results": results,
     }
     with open(os.path.join(run_dir, run_id + ".summary.json"), "w") as f:

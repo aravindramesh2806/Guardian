@@ -10,10 +10,10 @@ hands those addresses to Guardian in these variables, each the service's HTTP `i
 A variable that is not set keeps the local stand-in (data/*.json, outbox/), like every other integration.
 Guardian never holds a Firedrill token; the address is all it gets.
 
-The docs give the envelope (POST {"operation", "arguments", "idempotency_key"}, body passed through
-unchanged) but not each service's operations. The names in OPS follow the real Gmail, Stripe and Slack
-APIs. Confirm them with `firedrill tools catalog-operations <release-id> --service gmail` (and stripe,
-slack) before the first drill; a wrong name comes back as 403 operation_not_declared.
+Each call is POST {"operation", "arguments", "idempotency_key"}; the body comes back unchanged. Firedrill's
+Gmail, Stripe and Slack copy the real REST APIs (checked 2026-11-20 with `firedrill tools
+catalog-operations`: Gmail 1.0.2, Stripe 1.0.2, Slack 1.0.3), so arguments are flat: path values
+(userId, id) sit next to the body or query fields.
 """
 import base64
 import json
@@ -22,6 +22,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 
 ENV = {"gmail": "GUARDIAN_GMAIL_URL", "stripe": "GUARDIAN_STRIPE_URL", "slack": "GUARDIAN_SLACK_URL"}
@@ -30,7 +31,7 @@ OPS = {
     "gmail": {"list": "messages.list", "get": "messages.get", "modify": "messages.modify",
               "labels": "labels.list", "create_label": "labels.create"},
     "stripe": {"charges": "charges.list"},
-    "slack": {"post": "chat.postMessage"},
+    "slack": {"post": "chat.postMessage", "channels": "conversations.list"},
 }
 
 QUARANTINE_LABEL = "Guardian/Quarantine"
@@ -156,7 +157,7 @@ def quarantine_label_id():
     found = next((l["id"] for l in labels if l.get("name") == QUARANTINE_LABEL), None)
     if not found:
         made = invoke("gmail", OPS["gmail"]["create_label"],
-                      {"userId": "me", "requestBody": {"name": QUARANTINE_LABEL}},
+                      {"userId": "me", "name": QUARANTINE_LABEL},
                       idempotency_key="guardian-label-quarantine")
         found = made.get("id", QUARANTINE_LABEL)
     _label_ids[url] = found
@@ -166,8 +167,7 @@ def quarantine_label_id():
 def quarantine(email_id):
     """Move one email out of the inbox into the quarantine label."""
     invoke("gmail", OPS["gmail"]["modify"],
-           {"userId": "me", "id": email_id,
-            "requestBody": {"addLabelIds": [quarantine_label_id()], "removeLabelIds": ["INBOX"]}},
+           {"userId": "me", "id": email_id, "addLabelIds": [quarantine_label_id()], "removeLabelIds": ["INBOX"]},
            idempotency_key="guardian-quarantine-" + email_id)
 
 
@@ -194,8 +194,18 @@ def transactions(profile, limit=100):
 
 # ---------- Slack ----------
 
+def channel_id(name):
+    """Slack posts need a channel id; find it by name, or use the value as given if it already is one."""
+    name = name.lstrip("#")
+    listing = invoke("slack", OPS["slack"]["channels"], {"types": "public_channel,private_channel", "limit": 200})
+    return next((c["id"] for c in listing.get("channels") or [] if c.get("name") == name), name)
+
+
 def tell_family(text, key):
-    channel = os.environ.get("GUARDIAN_FAMILY_CHANNEL", "family")
-    invoke("slack", OPS["slack"]["post"], {"channel": channel, "text": text},
-           idempotency_key="guardian-" + re.sub(r"[^A-Za-z0-9_-]", "-", key))
-    return channel
+    name = os.environ.get("GUARDIAN_FAMILY_CHANNEL", "family")
+    out = invoke("slack", OPS["slack"]["post"], {"channel": channel_id(name), "text": text,
+                                                 "client_msg_id": str(uuid.uuid5(uuid.NAMESPACE_URL, "guardian:" + key))},
+                 idempotency_key="guardian-" + re.sub(r"[^A-Za-z0-9_-]", "-", key))
+    if out.get("ok") is False:
+        raise RuntimeError("Slack refused the message (%s)" % out.get("error"))
+    return "#" + name

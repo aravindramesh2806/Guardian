@@ -21,6 +21,11 @@ def latest(run_dir):
 def brief_lines(summary):
     """Three to five lines a person reads in ten seconds. Only threats new in this run."""
     new = [r for r in summary["results"] if r["new"]]
+    gaps = summary.get("source_errors") or []
+    if gaps:
+        warn = "Could not check everything: " + "; ".join(gaps) + ". I will try again next run."
+        if not new:
+            return ["Nothing new in what I could check.", warn]
     if not new:
         return ["All clear: nothing new since your last check."]
     family = summary.get("family_told", 0)
@@ -29,12 +34,14 @@ def brief_lines(summary):
         summary["waiting_for_you"], "s" if summary["waiting_for_you"] == 1 else "",
         (", and your family was told about %d" % family) if family else "")]
     for r in new[:3]:
-        done = [a["status"] for a in r["actions"] if a["status"].endswith("(simulated)") and a["action"] != "alert"]
+        done = [a["status"] for a in r["actions"] if a["status"].endswith("simulated)") and a["action"] != "alert"]
         lines.append("- " + r["summary"] + (" -> " + "; ".join(done) if done else ""))
     for r in summary["results"]:
         for a in r["actions"]:
             if a.get("ask"):
                 lines.append("Needs you: " + a["ask"])
+    if gaps:
+        lines.insert(1, warn)
     return lines[:5] if len(lines) > 5 else lines
 
 
