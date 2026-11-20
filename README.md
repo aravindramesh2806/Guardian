@@ -23,10 +23,14 @@ Senior protection mode lowers the bar for calls, because older adults are target
 Python 3.9+ and the standard library only. No installs.
 
 ```bash
+npm install               # Statsig web SDK (only needed to refresh web/vendor/statsig.min.js)
 python3 agent/run.py      # detect, decide, act, record
 python3 agent/brief.py    # daily brief + web/report.html
 python3 -m unittest discover -s tests -t .
 ```
+
+Open the report over http, so the Statsig web SDK works: `python3 -m http.server 8000 -d web`, then
+<http://localhost:8000/report.html>. `web/report.html` is generated and not committed.
 
 Run `agent/run.py` twice: the second run repeats nothing. Delete `runs/` and `outbox/` to start fresh.
 
@@ -48,11 +52,12 @@ family alerts, disputes). Replacing one with a real integration changes only its
 
 | Tool | Role | Status |
 |---|---|---|
-| Amplitude | Audit trail: every detect, guard and act step is an event | Live when `AMPLITUDE_API_KEY` is set |
+| Amplitude | Audit trail: every detect, guard and act step is an event, with the run's gate values | **Live and verified** with `AMPLITUDE_API_KEY` |
 | SingleStore | Threats and actions store (the "never repeat" check) | Live when `SINGLESTORE_*` is set; SQLite otherwise. Data API path not yet verified |
 | Superlinked SIE | Borderline phishing and call checks; alert drafting with a fact guard | Live when `SIE_*` is set; rules and templates otherwise. Endpoint shape not yet verified |
 | Persona Relay | `live_human_presence` check before Guardian may lock a card | Local stand-in in `data/verification.json`; live needs the Node sidecar (to do) |
-| Statsig | Gates: auto-block, auto-quarantine, auto-lock, disputes, family alerts, kill switch | Local stand-in in `data/gates.json` |
+| Statsig (web) | Report page: session replay, auto-capture analytics, `guardian_report_viewed` and `guardian_threat_opened` events | **Live and verified** with `STATSIG_CLIENT_KEY` (initialize 200, events 202) |
+| Statsig (gates) | `senior_protection`, auto-block, auto-quarantine, auto-lock, disputes, family alerts, kill switch; every gate's value and source goes into each Amplitude event | Live when `STATSIG_SERVER_SECRET` is set (`agent/flags.py`, HTTP API, not yet verified); `data/gates.json` otherwise |
 
 Roadmap: Airbyte (live Gmail, phone and card sync), Parakeet on SIE (voicemail transcription),
 cognee (what is normal for this person), Personal Agent Protocol (reaching banks and stores directly).

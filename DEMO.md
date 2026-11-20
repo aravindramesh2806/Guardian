@@ -1,7 +1,8 @@
 # Guardian: 3-minute demo
 
 **Setup before going on stage:** `rm -rf runs outbox && python3 agent/run.py && python3 agent/brief.py`,
-then open `web/report.html`. Keep a terminal ready for the second run.
+then `python3 -m http.server 8000 -d web` and open <http://localhost:8000/report.html>.
+Keep a terminal ready for the second run.
 
 ## 0:00 – 0:30 The problem
 "People aged 60 and over reported about $7.7 billion lost to fraud in 2025, roughly 60% more than the
@@ -33,6 +34,10 @@ A kill switch stops every action but still lets alerts through."
 ## 2:15 – 2:45 It never nags twice
 Run `python3 agent/run.py` again live: 0 new threats, nothing repeated, the dispute still waiting.
 
+## Optional beat: complete the loop (Amplitude + Statsig)
+Turn `senior_protection` off in Statsig, rerun: a borderline gift-card voicemail is no longer caught.
+Show both groups in Amplitude (every event carries the gate values), turn it back on.
+
 ## 2:45 – 3:00 Close
 "Guardian: the personal agent that protects you, tells your family, and shows its work.
-Built with Amplitude, SingleStore, Superlinked and Persona."
+Built with Amplitude, Statsig, SingleStore, Superlinked and Persona."

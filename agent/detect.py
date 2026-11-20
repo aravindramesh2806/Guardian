@@ -168,10 +168,14 @@ def call_score(call, contacts):
     return min(round(score, 2), 1.0), reasons
 
 
-def scam_calls(profile, calls):
-    """Scam calls, voicemails and texts. Senior protection lowers the bar by 0.1."""
+def scam_calls(profile, calls, senior=None):
+    """Scam calls, voicemails and texts. Senior protection lowers the bar by 0.1.
+
+    `senior` comes from the senior_protection gate; None falls back to the profile setting.
+    """
     out = []
-    senior = profile.get("protection") == "senior"
+    if senior is None:
+        senior = profile.get("protection") == "senior"
     threshold, borderline = (0.5, 0.3) if senior else (0.6, 0.4)
     contacts = profile.get("phone_contacts", [])
     for c in calls:
@@ -214,7 +218,7 @@ def card_misuse(profile, transactions, receipts):
     return out
 
 
-def all_threats(data_dir=None):
+def all_threats(data_dir=None, senior=None):
     """Run every detector over the person's data."""
     profile = load("profile.json", data_dir)
     receipts = load("receipts.json", data_dir)
@@ -222,7 +226,7 @@ def all_threats(data_dir=None):
     found = (breaches(profile, load("breaches.json", data_dir), receipts)
              + takeover(profile, inbox)
              + phishing(profile, inbox)
-             + scam_calls(profile, load("calls.json", data_dir))
+             + scam_calls(profile, load("calls.json", data_dir), senior)
              + card_misuse(profile, load("transactions.json", data_dir), receipts))
     # Most urgent first: things a scammer is doing right now, then money, then accounts, then news.
     severity = {"high": 0, "medium": 1}

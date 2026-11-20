@@ -38,8 +38,51 @@ def brief_lines(summary):
     return lines[:5] if len(lines) > 5 else lines
 
 
-def report(summary, run_dir, out):
+STATSIG_SCRIPT = """<script src="vendor/statsig.min.js"></script>
+<script>
+// Statsig web SDK: session replay, auto-capture (web analytics) and two custom events.
+(async () => {
+  const { StatsigClient, StatsigSessionReplayPlugin, StatsigAutoCapturePlugin } = window.Statsig;
+  const client = new StatsigClient(%s, { userID: "demo-user" }, {
+    plugins: [new StatsigSessionReplayPlugin(), new StatsigAutoCapturePlugin()],
+  });
+  await client.initializeAsync();
+  window.guardianStatsig = client;
+  client.logEvent("guardian_report_viewed", %s, %s);
+  await client.flush();
+  document.querySelectorAll("details[data-kind]").forEach((d) => d.addEventListener("toggle", async () => {
+    if (!d.open) return;
+    client.logEvent("guardian_threat_opened", d.dataset.kind, { threat: d.dataset.threat });
+    await client.flush();
+  }));
+})().catch((e) => console.error("Statsig failed to start", e));
+</script>"""
+
+
+def statsig_script(summary, client_key):
+    """The Statsig tag for the page, or nothing when no client key is set."""
+    if not client_key:
+        return ""
+    meta = {"threats": str(summary["threats"]), "stopped": str(summary["stopped"]),
+            "waiting_for_you": str(summary["waiting_for_you"]),
+            "family_told": str(summary.get("family_told", 0))}
+    return STATSIG_SCRIPT % (json.dumps(client_key), json.dumps(summary["run_id"]), json.dumps(meta))
+
+
+def gate_badge(summary):
+    """One line showing which gates were on for this run and who decided."""
+    gates = summary.get("gates") or {}
+    if not gates:
+        return ""
+    parts = ["%s %s (%s)" % (name, "on" if g["value"] else "off", g["source"].split(" ")[0])
+             for name, g in gates.items()]
+    return "<p class='ev'>Gates: %s</p>" % html.escape(" · ".join(parts))
+
+
+def report(summary, run_dir, out, client_key=None):
     """Static page: the brief, then each threat with its actions and the logged steps behind them."""
+    if client_key is None:
+        client_key = os.environ.get("STATSIG_CLIENT_KEY", "")
     steps = {}
     log = os.path.join(run_dir, summary["run_id"] + ".jsonl")
     if os.path.exists(log):
@@ -60,9 +103,11 @@ def report(summary, run_dir, out):
         cards.append(
             "<section><h2><span class='tag' style='background:%s'>%s</span> %s</h2>"
             "<p class='ev'>Evidence: <code>%s</code></p><ul>%s</ul>"
-            "<details><summary>Audit trail (%d steps)</summary><ol>%s</ol></details></section>" % (
+            "<details data-kind='%s' data-threat='%s'><summary>Audit trail (%d steps)</summary>"
+            "<ol>%s</ol></details></section>" % (
                 colour.get(r["severity"], "#4a5568"), html.escape(r["severity"]), html.escape(r["summary"]),
-                html.escape(json.dumps(r["evidence"], default=str)), acts, len(steps.get(r["threat"], [])), trail))
+                html.escape(json.dumps(r["evidence"], default=str)), acts, html.escape(r["kind"]),
+                html.escape(r["threat"]), len(steps.get(r["threat"], [])), trail))
     page = """<!doctype html><html><head><meta charset="utf-8"><title>Guardian report</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>:root{--bg:#fff;--fg:#1a202c;--line:#e2e8f0;--muted:#4a5568}
@@ -72,15 +117,18 @@ section{border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:
 h2{font-size:17px}.tag{color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;text-transform:uppercase}
 .ev,code{font-size:12px;color:var(--muted);word-break:break-word}.brief{white-space:pre-line;font-size:16px}</style>
 </head><body><h1>Guardian</h1><p class="brief">%s</p>
-<p class="ev">Run %s · data: %s · Persona check: %s</p>%s</body></html>""" % (
+<p class="ev">Run %s · data: %s · Persona check: %s</p>%s%s%s</body></html>""" % (
         html.escape("\n".join(brief_lines(summary))), html.escape(summary["run_id"]),
-        html.escape(summary["store"]), html.escape(str(summary["persona"])), "".join(cards))
+        html.escape(summary["store"]), html.escape(str(summary["persona"])), gate_badge(summary),
+        "".join(cards), statsig_script(summary, client_key))
     with open(out, "w") as f:
         f.write(page)
     return out
 
 
 if __name__ == "__main__":
+    from agent.run import load_env
+    load_env()
     run_dir = os.path.join(ROOT, "runs")
     s = latest(run_dir)
     print("\n".join(brief_lines(s)))

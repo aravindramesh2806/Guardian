@@ -13,10 +13,11 @@ class AuditLog:
         self.run_id = run_id
         self.path = os.path.join(run_dir, run_id + ".jsonl")
         self.key = os.environ.get("AMPLITUDE_API_KEY", "")
+        self.gates = {}  # gate values for this run, attached to every event
 
     def event(self, step, tool, inputs, output, subject_id=""):
         rec = {"run_id": self.run_id, "step": step, "tool": tool, "subject_id": subject_id,
-               "inputs": inputs, "output": output, "ts": int(time.time() * 1000)}
+               "inputs": inputs, "output": output, "gates": self.gates, "ts": int(time.time() * 1000)}
         with open(self.path, "a") as f:
             f.write(json.dumps(rec, default=str) + "\n")
         if self.key:
@@ -27,7 +28,8 @@ class AuditLog:
         body = {"api_key": self.key, "events": [{
             "user_id": "demo-user", "event_type": "agent_" + rec["tool"],
             "event_properties": {"run_id": rec["run_id"], "step": rec["step"],
-                                 "subject_id": rec["subject_id"], "output": rec["output"]},
+                                 "subject_id": rec["subject_id"], "output": rec["output"],
+                                 "gates": rec["gates"]},
             "time": rec["ts"]}]}
         req = urllib.request.Request(AMPLITUDE_URL, data=json.dumps(body, default=str).encode(),
                                      headers={"Content-Type": "application/json"})

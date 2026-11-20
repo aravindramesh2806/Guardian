@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 for _k in ("SIE_BASE_URL", "SINGLESTORE_HOST", "AMPLITUDE_API_KEY"):
     os.environ.pop(_k, None)
 
-from agent import brief, detect, respond
+from agent import brief, detect, flags, respond
 from agent import run as runner
 from agent import store as st
 
@@ -153,7 +153,62 @@ class BriefTests(Base):
         s = self.run_once()
         with open(os.path.join(self.tmp, "runs", s["run_id"] + ".jsonl")) as f:
             rows = [json.loads(l) for l in f]
-        self.assertEqual({r["subject_id"] for r in rows}, set(self.by_key(s)))
+        self.assertEqual({r["subject_id"] for r in rows} - {"run"}, set(self.by_key(s)))
+        self.assertEqual(rows[0]["tool"], "check_gates")
+        self.assertTrue(all(r["gates"]["auto_block_numbers"] is True for r in rows[1:]))
+
+
+class PageTests(Base):
+    def test_statsig_only_with_a_client_key(self):
+        s = self.run_once()
+        runs = os.path.join(self.tmp, "runs")
+        without = brief.report(s, runs, os.path.join(self.tmp, "a.html"), client_key="")
+        withkey = brief.report(s, runs, os.path.join(self.tmp, "b.html"), client_key="client-test")
+        self.assertNotIn("statsig.min.js", open(without).read())
+        page = open(withkey).read()
+        self.assertIn('new StatsigClient("client-test"', page)
+        self.assertIn("StatsigSessionReplayPlugin()", page)
+        self.assertIn("guardian_report_viewed", page)
+        self.assertIn("data-kind='scam_call'", page)
+        self.assertIn("Gates: senior_protection on (local)", page)
+
+
+class FlagTests(Base):
+    def test_local_gates_when_no_statsig_key(self):
+        os.environ.pop("STATSIG_SERVER_SECRET", None)
+        snap = flags.snapshot(detect.load("gates.json", self.data), detect.load("profile.json", self.data))
+        self.assertEqual(snap["senior_protection"], {"value": True, "source": "local"})
+        self.assertEqual(snap["kill_switch"], {"value": False, "source": "local"})
+
+    def test_statsig_answer_wins_and_is_labelled(self):
+        snap = flags.snapshot({}, {}, check=lambda gate, user: gate == "kill_switch")
+        self.assertEqual(snap["kill_switch"], {"value": True, "source": "statsig"})
+        self.assertEqual(snap["senior_protection"]["source"], "statsig")
+
+    def test_statsig_failure_falls_back_to_local(self):
+        def broken(gate, user):
+            raise OSError("unreachable")
+        snap = flags.snapshot({"auto_lock_card": True}, {}, check=broken)
+        self.assertTrue(snap["auto_lock_card"]["value"])
+        self.assertIn("statsig error: OSError", snap["auto_lock_card"]["source"])
+
+    def test_senior_gate_off_misses_the_borderline_call(self):
+        # The "complete the loop" comparison: same data, gate on versus off.
+        with open(os.path.join(self.data, "calls.json")) as f:
+            calls = json.load(f)
+        calls.append({"id": "c-299", "kind": "voicemail", "from": "+1-555-0999", "caller_id": "Unknown",
+                      "at": "2026-11-20T15:00:00", "transcript": "Please call back about your gift card."})
+        with open(os.path.join(self.data, "calls.json"), "w") as f:
+            json.dump(calls, f)
+        on = self.run_once()
+        self.store = st.LocalStore(os.path.join(self.tmp, "t2.sqlite3"))
+        off = runner.run(data_dir=self.data, run_dir=os.path.join(self.tmp, "runs2"),
+                         outbox_dir=os.path.join(self.tmp, "outbox2"), store=self.store,
+                         gate_check=lambda gate, user: gate != "senior_protection" and gate not in
+                         ("kill_switch", "dispute_needs_approval"))
+        self.assertIn("suspicious:c-299", self.by_key(on))
+        self.assertNotIn("suspicious:c-299", self.by_key(off))
+        self.assertEqual(off["gates"]["senior_protection"], {"value": False, "source": "statsig"})
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent import detect, respond
+from agent import detect, flags, respond
 from agent import store as st
 from agent.audit import AuditLog
 
@@ -58,7 +58,7 @@ def handle(threat, ctx):
             "summary": threat["summary"], "evidence": threat["evidence"], "new": is_new, "actions": outcomes}
 
 
-def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None):
+def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None):
     run_id = "run-" + time.strftime("%Y%m%d-%H%M%S") + "-%04d" % (int(time.time() * 1000) % 10000)
     run_dir = run_dir or os.path.join(ROOT, "runs")
     ctx = {
@@ -68,10 +68,13 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None):
         "store": store or st.open_store(os.path.join(run_dir, "guardian.sqlite3")),
         "outbox_dir": outbox_dir or os.path.join(ROOT, "outbox"),
         "profile": detect.load("profile.json", data_dir),
-        "gates": detect.load("gates.json", data_dir),
         "verification": detect.load("verification.json", data_dir),
     }
-    results = [handle(t, ctx) for t in detect.all_threats(data_dir)]
+    ctx["flags"] = flags.snapshot(detect.load("gates.json", data_dir), ctx["profile"], check=gate_check)
+    ctx["gates"] = flags.values(ctx["flags"])
+    ctx["log"].gates = ctx["gates"]
+    ctx["log"].event("gates", "check_gates", {}, ctx["flags"], "run")
+    results = [handle(t, ctx) for t in detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"])]
 
     def count(pred):
         return sum(1 for r in results for a in r["actions"] if pred(a))
@@ -83,6 +86,7 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None):
         "alerts": count(lambda a: a["action"] == "alert" and a["status"].endswith("(simulated)")),
         "family_told": count(lambda a: a["action"] == "notify_trusted" and a["status"].endswith("(simulated)")),
         "waiting_for_you": count(lambda a: a["status"] == "waiting for you"),
+        "gates": ctx["flags"],
         "results": results,
     }
     with open(os.path.join(run_dir, run_id + ".summary.json"), "w") as f:
