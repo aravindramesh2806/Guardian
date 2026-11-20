@@ -115,7 +115,8 @@ def _append(outbox_dir, name, record):
     path = os.path.join(outbox_dir, name)
     with open(path, "a") as f:
         f.write(json.dumps(record, default=str) + "\n")
-    return path
+    # Record a short relative path, so reports never reveal where the project lives on disk.
+    return os.path.join(os.path.basename(os.path.normpath(outbox_dir)), name)
 
 
 def act(action, threat, profile, outbox_dir):
