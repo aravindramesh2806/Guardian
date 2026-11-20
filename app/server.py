@@ -11,6 +11,7 @@ Security: sign-in is passkeys only (no passwords). Risky changes (approving a di
 from our own origin with a JSON body; the session cookie is HttpOnly and SameSite=Strict.
 """
 import base64
+import hmac
 import html
 import json
 import urllib.parse
@@ -193,7 +194,7 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("%s %s\n" % (self.command, self.path.split("?")[0]))
 
     # -- helpers --
-    def _send(self, code, body, ctype="application/json", cookie=None, csp=None):
+    def _send(self, code, body, ctype="application/json", cookie=None, csp=None, extra_cookie=None):
         raw = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -210,12 +211,30 @@ class Handler(BaseHTTPRequestHandler):
                                  % (cookie, SESSION_SECONDS, secure))
             else:
                 self.send_header("Set-Cookie", "gsid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0%s" % secure)
+        if extra_cookie:
+            self.send_header("Set-Cookie", extra_cookie)
         self.end_headers()
         self.wfile.write(raw)
 
-    def _redirect(self, url):
+    def _oauth_cookie(self, state):
+        """Ties a Google sign-in to the browser that started it. Lax, because a Strict cookie is not sent on
+        Google's cross-site redirect back; scoped to the callback path and gone after 10 minutes."""
+        secure = "; Secure" if ORIGIN.startswith("https://") else ""
+        return "goauth=%s; HttpOnly; SameSite=Lax; Path=/oauth/google/callback; Max-Age=%d%s" % (
+            state, 600 if state else 0, secure)
+
+    def _cookie(self, name):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == name:
+                return v
+        return ""
+
+    def _redirect(self, url, extra_cookie=None):
         self.send_response(302)
         self.send_header("Location", url)
+        if extra_cookie:
+            self.send_header("Set-Cookie", extra_cookie)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -224,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
         """Move on with a same-site navigation, so the Strict session cookie is sent again."""
         page = ('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=%s">'
                 '<title>Guardian</title><p>One moment…</p>' % html.escape(url, quote=True))
-        self._send(200, page.encode(), STATIC_TYPES[".html"])
+        self._send(200, page.encode(), STATIC_TYPES[".html"], extra_cookie=self._oauth_cookie(""))
 
     def _session(self):
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -273,14 +292,22 @@ class Handler(BaseHTTPRequestHandler):
             except gmail.GmailError as e:
                 return self._redirect("/?gmail_error=" + urllib.parse.quote(str(e)))
             with _state:
-                oauth_flows[state] = {"uid": s["uid"], "verifier": verifier, "created": time.time()}
-            return self._redirect(url)
+                now = time.time()
+                for k in [k for k, f in oauth_flows.items() if now - f["created"] > 600]:
+                    oauth_flows.pop(k, None)
+                oauth_flows[state] = {"uid": s["uid"], "verifier": verifier, "created": now}
+            return self._redirect(url, extra_cookie=self._oauth_cookie(state))
         if path == "/oauth/google/callback":
             # Google sends the person back here. The Strict session cookie is not sent on this cross-site
             # return, so the one-time `state` (made by their own session) says who it is.
+            # The state must also match the cookie set in the browser that started this sign-in. Without that,
+            # someone could start a sign-in from their own account and get another person to finish it,
+            # linking that person's Gmail to their account (OAuth login CSRF).
             q = urllib.parse.parse_qs(self.path.partition("?")[2])
+            state = (q.get("state") or [""])[0]
+            same_browser = bool(state) and hmac.compare_digest(self._cookie("goauth").encode(), state.encode())
             with _state:
-                flow = oauth_flows.pop((q.get("state") or [""])[0], None)
+                flow = oauth_flows.pop(state, None) if same_browser else None
             if not flow or time.time() - flow["created"] > 600:
                 return self._bounce("/?gmail_error=" + urllib.parse.quote("That sign-in expired. Please try again."))
             if q.get("error") or not q.get("code"):
