@@ -196,7 +196,10 @@ def _apply_settings(uid):
 
 
 def setup(uid, who, protected_name, family_name, family_phone, mode, senior):
-    """The one-time setup. Family members are added as "waiting for their YES"."""
+    """The one-time setup. A trusted person is saved as "not invited": nothing is sent to them from here.
+
+    The invite goes out from send_invite, after a fresh passkey and Persona check (L6).
+    """
     if who not in ("me", "family"):
         raise AppError("Choose who Guardian protects.")
     if mode not in MODES:
@@ -206,16 +209,54 @@ def setup(uid, who, protected_name, family_name, family_phone, mode, senior):
         meta["who"] = who
         meta["protected_name"] = _clean_name(protected_name, "name") if who == "family" else None
         meta["mode"], meta["senior"] = mode, bool(senior)
-        meta["family"] = None
+        before, meta["family"] = meta.get("family"), None
         if family_name or family_phone:
             phone = re.sub(r"[^\d+]", "", str(family_phone or ""))
             if not re.fullmatch(r"\+?\d{7,15}", phone):
                 raise AppError("Please enter a phone number with 7 to 15 digits.")
-            meta["family"] = {"name": _clean_name(family_name, "name"), "phone": phone, "status": "waiting"}
+            name = _clean_name(family_name, "name")
+            if before and before["phone"] == phone:
+                meta["family"] = dict(before, name=name)  # same number: keep their invite and their YES
+            else:
+                meta["family"] = {"name": name, "phone": phone, "status": "not invited", "invited_at": None}
         meta["setup_done"] = True
         save(uid, meta)
         _apply_settings(uid)
     return load(uid)
+
+
+def invite_text(meta):
+    """What the trusted person is sent. Plain, says who added them, and asks before anything else is sent."""
+    adder = meta["name"].split(" ")[0]
+    protected = (meta.get("protected_name") or meta["name"]).split(" ")[0]
+    return "%s added you to Guardian. If a scammer targets %s, we'll text you. Reply YES to agree." % (
+        adder, protected)
+
+
+def send_invite(uid):
+    """Text the trusted person the invite (simulated into the outbox, like every Guardian message).
+
+    The server asks for a fresh passkey first; this needs a Persona pass under 24 hours, so a stolen
+    session cannot point Guardian's scam alerts at a number of its own. Their consent stays "waiting"
+    until they reply YES.
+    """
+    with _lock(uid):
+        meta = load(uid)
+        fam = meta.get("family")
+        if not fam:
+            raise AppError("No one has been added yet.")
+        if fam["status"] == "agreed":
+            raise AppError("%s has already said yes." % fam["name"])
+        if not verification(uid)["fresh"]:
+            raise AppError("Please do the Persona check first. It lasts 24 hours.")
+        at = _now()
+        os.makedirs(_dir(uid, "outbox"), exist_ok=True)
+        with open(_dir(uid, "outbox", "family_invites.jsonl"), "a") as f:
+            f.write(json.dumps({"to": fam["phone"], "name": fam["name"], "text": invite_text(meta),
+                                "at": at, "simulated": True}) + "\n")
+        fam["status"], fam["invited_at"] = "waiting", at
+        save(uid, meta)
+        _apply_settings(uid)
 
 
 def family_said_yes(uid):
@@ -224,6 +265,8 @@ def family_said_yes(uid):
         meta = load(uid)
         if not meta.get("family"):
             raise AppError("No one has been added yet.")
+        if meta["family"]["status"] == "not invited":
+            raise AppError("Send them the invite first.")
         meta["family"]["status"] = "agreed"
         save(uid, meta)
         _apply_settings(uid)
@@ -449,6 +492,47 @@ HEADLINES = {"quarantine": "Moved to quarantine", "block_number": "Number blocke
 FRIENDLY = {"quarantine": "Quarantine", "block_number": "Blocking the number", "lock_card": "Card lock",
             "dispute": "Dispute", "notify_trusted": "Telling your family"}
 
+# Things Guardian can do about a threat once the person confirms it's a scam. Telling family is not here:
+# that depends only on the family member's own YES.
+FIXABLE = ("block_number", "quarantine", "lock_card", "dispute")
+
+
+def _fix_label(action, evidence, profile):
+    """Plain words for one fix, e.g. "Block +1-555-0100" or "Lock card ending 4821"."""
+    target = action["key"].split(":", 1)[-1]
+    if action["action"] == "block_number":
+        return "Block " + target
+    if action["action"] == "quarantine":
+        return "Move this email out of your inbox"
+    if action["action"] == "lock_card":
+        c = respond.card(profile, target) or {}
+        return "Lock card ending " + c["last4"] if c.get("last4") else "Lock the card"
+    if action["action"] == "dispute":
+        if evidence.get("amount") is not None and evidence.get("merchant"):
+            return "Dispute $%.2f at %s" % (evidence["amount"], evidence["merchant"])
+        return "Dispute the charge"
+    return FRIENDLY.get(action["action"], action["action"])
+
+
+def _fixes(r, rows, profile):
+    """What Guardian could still do about one threat, and whether the person can say yes to it now."""
+    out, seen = [], set()
+    for a in r["actions"]:
+        if a["action"] not in FIXABLE or a["key"] in seen:
+            continue
+        seen.add(a["key"])
+        status = (rows.get(a["key"]) or {}).get("status") or a["status"]
+        reason = a.get("reason") or ""
+        done = respond.is_done(status)
+        # Paused or watch-only (kill switch), already approved, or something only the bank can do: no button.
+        can = (not done and status == "waiting for you" and not reason.startswith("kill switch")
+               and not reason.startswith("you approved it") and "no lock option" not in reason
+               and "Persona" not in reason)
+        out.append({"key": a["key"], "action": a["action"], "label": _fix_label(a, r.get("evidence") or {}, profile),
+                    "done": done, "can": can, "needs_persona": "Persona" in reason,
+                    "reason": "" if done else reason})
+    return out
+
 
 def feed(uid):
     """Everything the home screen shows, in plain words."""
@@ -456,6 +540,8 @@ def feed(uid):
     s = _latest_summary(uid) or {"results": []}
     store = _store(uid)
     items, needs_you = [], []
+    profile = _read(_dir(uid, "data", "profile.json"), {}) or {}
+    scams = st.marked_scam(store)
     for r in s["results"]:
         rows = {row["action_key"]: row for row in st.actions_for(store, r["threat"])}
         # What Guardian has done about this threat, from the store (a later run only says "already done").
@@ -472,7 +558,10 @@ def feed(uid):
             if a.get("ask") and a["status"] == "waiting for you":
                 needs_you.append({"key": a["key"], "ask": a["ask"], "threat": r["threat"]})
         items.append({"threat": r["threat"], "kind": r["kind"], "severity": r["severity"], "summary": r["summary"],
-                      "did": did, "would": would, "waiting": waiting, "steps": steps, "marked_real": bool(r.get("marked_real")) or bool(undone)})
+                      "did": did, "would": would, "waiting": waiting, "steps": steps, "marked_real": bool(r.get("marked_real")) or bool(undone),
+                      # For "Yes, it's a scam": what Guardian can still do, and the person's own steps.
+                      "confirmed_scam": r["threat"] in scams, "fixes": _fixes(r, rows, profile),
+                      "how": respond.steps_for(r["kind"], r.get("evidence") or {}, profile)})
     return {
         "name": meta.get("protected_name") or meta["name"], "mode": meta["mode"], "paused": meta["paused"],
         "family": meta.get("family"), "data_source": meta["data_source"], "last_run": meta.get("last_run"),
@@ -484,10 +573,28 @@ def feed(uid):
     }
 
 
-def approve(uid, action_key):
-    """Say yes to one held action, then check at once so it runs now."""
+def confirm_scam(uid, threat_key):
+    """"Yes, it's a scam": remember it. Nothing runs yet: each fix waits for its own yes (approve)."""
     with _lock(uid):
-        held = {n["key"] for n in feed(uid)["needs_you"]}
+        item = next((i for i in feed(uid)["items"] if i["threat"] == threat_key), None)
+        if not item:
+            raise AppError("That item is no longer on your list.")
+        store = _store(uid)
+        if item["marked_real"] or threat_key in st.marked_real(store):
+            raise AppError("You said this one was real. Guardian has left it alone.")
+        st.mark_scam(store, threat_key, _now())
+
+
+def approve(uid, action_key):
+    """Say yes to one held action, then check at once so it runs now.
+
+    That is either something Guardian asked about (needs_you), or a fix for a threat the person has
+    confirmed is a scam.
+    """
+    with _lock(uid):
+        f = feed(uid)
+        held = {n["key"] for n in f["needs_you"]}
+        held |= {x["key"] for i in f["items"] if i["confirmed_scam"] for x in i["fixes"] if x["can"]}
         if action_key not in held:
             raise AppError("That request is no longer waiting for you.")
         st.approve(_store(uid), action_key, _now())

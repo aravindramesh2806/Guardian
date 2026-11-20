@@ -52,9 +52,71 @@ class Core(unittest.TestCase):
     def test_family_is_not_told_until_they_say_yes(self):
         uid = new_user()
         self.assertFalse(any("Family told" in i["did"] for i in core.feed(uid)["items"]))
+        core.set_claim(uid, "passed")
+        core.send_invite(uid)
+        core.run_for(uid)
+        self.assertFalse(any("Family told" in i["did"] for i in core.feed(uid)["items"]))
         core.family_said_yes(uid)
         core.run_for(uid)
         self.assertTrue(any("Family told" in i["did"] for i in core.feed(uid)["items"]))
+
+    def invites(self, uid):
+        path = os.path.join(USERS_TMP, uid, "outbox", "family_invites.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(l) for l in f]
+
+    def test_setup_saves_family_but_texts_no_one(self):
+        uid = new_user()
+        self.assertEqual(core.load(uid)["family"]["status"], "not invited")
+        self.assertEqual(self.invites(uid), [])
+        with self.assertRaises(core.AppError):
+            core.family_said_yes(uid)  # they can't say yes to an invite they never got
+
+    def test_invite_needs_a_persona_pass(self):
+        uid = new_user()
+        with self.assertRaises(core.AppError):
+            core.send_invite(uid)
+        core.set_claim(uid, "failed")
+        with self.assertRaises(core.AppError):
+            core.send_invite(uid)
+        self.assertEqual(self.invites(uid), [])
+        self.assertEqual(core.load(uid)["family"]["status"], "not invited")
+
+    def test_invite_is_written_and_waits_for_yes(self):
+        uid = new_user()
+        core.set_claim(uid, "passed")
+        core.send_invite(uid)
+        [inv] = self.invites(uid)
+        self.assertEqual((inv["to"], inv["simulated"]), ("+15550142", True))
+        self.assertEqual(inv["text"], "Rose added you to Guardian. If a scammer targets Rose, we'll text you. Reply YES to agree.")
+        fam = core.load(uid)["family"]
+        self.assertEqual(fam["status"], "waiting")
+        self.assertTrue(fam["invited_at"])
+        profile = json.load(open(os.path.join(USERS_TMP, uid, "data", "profile.json")))
+        self.assertFalse(profile["trusted_contacts"][0]["consent"])
+        core.family_said_yes(uid)
+        with self.assertRaises(core.AppError):
+            core.send_invite(uid)  # already agreed: nothing more to send
+
+    def test_invite_for_someone_you_look_after_names_them(self):
+        uid = core.create_user("Sam Lee", dict(CRED, id="cred-%f" % time.time()))
+        core.setup(uid, "family", "Rose", "Alex (grandson)", "+1 555 0177", "tell", True)
+        core.set_claim(uid, "passed")
+        core.send_invite(uid)
+        self.assertEqual(self.invites(uid)[0]["text"],
+                         "Sam added you to Guardian. If a scammer targets Rose, we'll text you. Reply YES to agree.")
+
+    def test_setup_again_keeps_their_yes_unless_the_number_changes(self):
+        uid = new_user()
+        core.set_claim(uid, "passed")
+        core.send_invite(uid)
+        core.family_said_yes(uid)
+        core.setup(uid, "me", None, "Sam", "+1 555 0142", "act", True)
+        self.assertEqual(core.load(uid)["family"]["status"], "agreed")
+        core.setup(uid, "me", None, "Sam", "+1 555 0100", "act", True)
+        self.assertEqual(core.load(uid)["family"]["status"], "not invited")
 
     def test_just_tell_me_acts_on_nothing(self):
         uid = new_user(mode="tell")
@@ -174,6 +236,18 @@ class Server(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/mode", {"mode": "tell"}, token)[0], 200)
         # Turning "act for me" back on does.
         self.assertEqual(self.request("POST", "/api/mode", {"mode": "act"}, token)[1].get("step_up"), True)
+        # So does texting a trusted person the invite.
+        core.set_claim(uid, "passed")
+        self.assertEqual(self.request("POST", "/api/family/invite", {}, token)[1].get("step_up"), True)
+        self.assertEqual(core.load(uid)["family"]["status"], "not invited")
+
+    def test_with_fresh_checks_the_invite_goes_out(self):
+        uid, token = self.session(stepped_up=True)
+        status, body, _ = self.request("POST", "/api/family/invite", {}, token)
+        self.assertEqual((status, body["error"]), (400, "Please do the Persona check first. It lasts 24 hours."))
+        core.set_claim(uid, "passed")
+        status, feed, _ = self.request("POST", "/api/family/invite", {}, token)
+        self.assertEqual((status, feed["family"]["status"]), (200, "waiting"))
 
     def test_with_a_fresh_check_approve_works(self):
         uid, token = self.session(stepped_up=True)

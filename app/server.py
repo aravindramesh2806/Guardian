@@ -346,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
                     s["stepped_up_at"] = time.time()
                 return self._send(200, {"ok": True})
             stepped_up = time.time() - s["stepped_up_at"] < STEP_UP_SECONDS
-            needs_step_up = path in ("/api/approve", "/api/delete", "/api/gmail/disconnect") or (
+            needs_step_up = path in ("/api/approve", "/api/delete", "/api/gmail/disconnect", "/api/family/invite") or (
                 path in ("/api/mode", "/api/setup") and body.get("mode") == "act" and core.load(uid)["mode"] != "act")
             if needs_step_up and not stepped_up:
                 return self._send(403, {"error": "Please confirm it's you first.", "step_up": True})
@@ -365,6 +365,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/gmail/disconnect":
                 core.disconnect_gmail(uid)
                 return self._send(200, core.feed(uid))
+            if path == "/api/family/invite":
+                core.send_invite(uid)
+                return self._send(200, core.feed(uid))
             if path == "/api/family/yes":
                 core.family_said_yes(uid)
                 return self._send(200, {"ok": True})
@@ -379,6 +382,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/real":
                 undone = core.mark_real(uid, str(body.get("threat") or ""))
                 return self._send(200, {"undone": undone, "feed": core.feed(uid)})
+            if path == "/api/scam":
+                # Only records the person's answer. Each fix still needs its own yes (and Face ID) via /api/approve.
+                core.confirm_scam(uid, str(body.get("threat") or ""))
+                return self._send(200, core.feed(uid))
             if path == "/api/pause":
                 core.set_paused(uid, bool(body.get("paused")))
                 return self._send(200, core.feed(uid))
