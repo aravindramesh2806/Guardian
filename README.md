@@ -38,7 +38,9 @@ Run `agent/run.py` twice: the second run repeats nothing. Delete `runs/` and `ou
 
 ```
 data/ (inbox, calls, card charges, receipts, breach feed)
-  -> agent/detect.py    rules score each item and explain why; borderline cases ask a model
+  -> agent/detect.py    rules score each item and explain why; messages from strangers are compared
+                        with known scam types (data/scam_patterns.json) on Superlinked SIE embeddings;
+                        borderline cases ask a model
   -> agent/respond.py   decide actions -> guard (gates, Persona check, consent) -> act or hold
   -> agent/store.py     write back every threat and action, so nothing repeats
   -> agent/audit.py     one event per step, locally and to Amplitude

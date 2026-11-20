@@ -1,0 +1,20 @@
+[
+  {"id": "bank-safe-account", "name": "bank impersonation (\"move money to a safe account\")",
+   "text": "This is your bank's fraud department. Your account has been compromised. Move your money to a safe account now and read me the code we just sent you. Don't tell anyone at the branch."},
+  {"id": "grandparent-bail", "name": "family emergency (\"grandma, it's me\")",
+   "text": "Grandma, it's me. I've been in an accident and I'm in jail. I need bail money right away. Please buy gift cards and send me the numbers. Don't tell Mom and Dad."},
+  {"id": "government-threat", "name": "government or tax threat",
+   "text": "This is the tax office. There is a warrant for your arrest for unpaid taxes. Pay today with gift cards or a wire transfer to avoid police action."},
+  {"id": "parcel-fee", "name": "parcel delivery fee text",
+   "text": "Your parcel is on hold because of an unpaid delivery fee. Pay the small fee at this link today or it will be returned."},
+  {"id": "toll-fee", "name": "unpaid toll text",
+   "text": "You have an unpaid toll balance. Pay now at the link to avoid late fees and suspension of your licence."},
+  {"id": "tech-support", "name": "fake tech support",
+   "text": "We detected a virus on your computer. Call our support line now and we will connect remotely to fix it. There is a fee to renew your protection."},
+  {"id": "refund-verify", "name": "fake refund or account verification",
+   "text": "Your refund is on hold. Log in and verify your account details within 24 hours or your account will be suspended."},
+  {"id": "prize", "name": "prize or lottery win",
+   "text": "Congratulations, you have won a prize. To claim it, pay the processing fee and confirm your bank details."},
+  {"id": "romance-money", "name": "online romance asking for money",
+   "text": "My love, I want to come and see you but I am stuck abroad. Please send money for the ticket, I will pay you back. Keep this between us."}
+]

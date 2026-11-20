@@ -109,12 +109,27 @@ def phishing_score(message, known_domains):
     return min(round(score, 2), 1.0), reasons
 
 
-def phishing(profile, inbox, threshold=0.7, borderline=0.4):
-    """Phishing emails, with a model check only for borderline scores."""
+SIMILAR_BOOST = 0.3
+
+
+def add_match(score, reasons, match):
+    """A close match to a known scam type adds to the score, with the reason shown."""
+    if not match:
+        return score, reasons
+    return (min(round(score + SIMILAR_BOOST, 2), 1.0),
+            reasons + ["reads like a known scam: %s (similarity %.2f)" % (match["name"], match["similarity"])])
+
+
+def phishing(profile, inbox, threshold=0.7, borderline=0.4, matches=None):
+    """Phishing emails, with a model check only for borderline scores.
+
+    `matches` maps an email id to its closest known scam type (see scam_similarity).
+    """
     out = []
     known = {a["domain"] for a in profile["accounts"]}
+    matches = matches or {}
     for m in inbox:
-        score, reasons = phishing_score(m, known)
+        score, reasons = add_match(*phishing_score(m, known), matches.get(m["id"]))
         verdict, model = None, "rules"
         if score >= threshold:
             verdict = "phishing"
@@ -168,7 +183,7 @@ def call_score(call, contacts):
     return min(round(score, 2), 1.0), reasons
 
 
-def scam_calls(profile, calls, senior=None):
+def scam_calls(profile, calls, senior=None, matches=None):
     """Scam calls, voicemails and texts. Senior protection lowers the bar by 0.1.
 
     `senior` comes from the senior_protection gate; None falls back to the profile setting.
@@ -178,8 +193,9 @@ def scam_calls(profile, calls, senior=None):
         senior = profile.get("protection") == "senior"
     threshold, borderline = (0.5, 0.3) if senior else (0.6, 0.4)
     contacts = profile.get("phone_contacts", [])
+    matches = matches or {}
     for c in calls:
-        score, reasons = call_score(c, contacts)
+        score, reasons = add_match(*call_score(c, contacts), matches.get(c["id"]))
         verdict, model = None, "rules"
         if score >= threshold:
             verdict = "scam_call"
@@ -218,6 +234,25 @@ def card_misuse(profile, transactions, receipts):
     return out
 
 
+def scam_similarity(profile, inbox, calls, data_dir=None):
+    """Closest known scam type for each message from someone the person does not know.
+
+    Known contacts and account domains are skipped: their real messages (a genuine bank reset email)
+    can read like a scam, and a scammer spoofing them is caught by the other rules. Returns
+    ({item id: match}, decided_by).
+    """
+    try:
+        patterns = load("scam_patterns.json", data_dir)
+    except FileNotFoundError:
+        return {}, "no scam patterns"
+    numbers = {c["number"] for c in profile.get("phone_contacts", [])}
+    domains = {a["domain"] for a in profile["accounts"]}
+    items = [(c["id"], c.get("transcript", "")) for c in calls if c["from"] not in numbers and c.get("transcript")]
+    items += [(m["id"], m["subject"] + "\n" + m["body"]) for m in inbox if domain_of(m["from"]) not in domains]
+    found, decided_by = models.scam_matches([t for _, t in items], patterns)
+    return {i: f for (i, _), f in zip(items, found) if f}, decided_by
+
+
 def _source(service, remote, local_name, data_dir, errors):
     """Read from Firedrill when it is set up, else the local file. A Firedrill failure skips that source
     (and is reported) rather than silently reading local demo data in its place."""
@@ -240,10 +275,12 @@ def all_threats(data_dir=None, senior=None, errors=None):
     receipts = load("receipts.json", data_dir)
     inbox = _source("gmail", firedrill.inbox, "inbox.json", data_dir, errors)
     transactions = _source("stripe", lambda: firedrill.transactions(profile), "transactions.json", data_dir, errors)
+    calls = load("calls.json", data_dir)
+    matches, _ = scam_similarity(profile, inbox, calls, data_dir)
     found = (breaches(profile, load("breaches.json", data_dir), receipts)
              + takeover(profile, inbox)
-             + phishing(profile, inbox)
-             + scam_calls(profile, load("calls.json", data_dir), senior)
+             + phishing(profile, inbox, matches=matches)
+             + scam_calls(profile, calls, senior, matches=matches)
              + card_misuse(profile, transactions, receipts))
     # Most urgent first: things a scammer is doing right now, then money, then accounts, then news.
     severity = {"high": 0, "medium": 1}
