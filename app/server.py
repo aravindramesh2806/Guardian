@@ -32,6 +32,7 @@ if __name__ == "__main__":
     load_env()
 
 import core  # noqa: E402
+import demo  # noqa: E402
 import gmail  # noqa: E402
 from webauthn import (generate_authentication_options, generate_registration_options,  # noqa: E402
                       options_to_json, verify_authentication_response, verify_registration_response)
@@ -287,13 +288,15 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/api/me":
             _, s = self._session()
+            demo_on = demo.enabled(ORIGIN)
             if not s:
-                return self._send(200, {"signed_in": False})
+                return self._send(200, {"signed_in": False, "demo_login": demo_on})
             try:
                 meta = core.load(s["uid"])
             except core.AppError:
-                return self._send(200, {"signed_in": False}, cookie="")
+                return self._send(200, {"signed_in": False, "demo_login": demo_on}, cookie="")
             return self._send(200, {"signed_in": True, "name": meta["name"], "setup_done": meta["setup_done"],
+                                    "demo": bool(meta.get("demo_username")), "demo_login": demo_on,
                                     "email": meta.get("email"), "email_verified": bool(meta.get("email_verified")),
                                     "stepped_up": time.time() - s["stepped_up_at"] < STEP_UP_SECONDS,
                                     # The setup screens show whether the Persona check is done and Gmail is offered.
@@ -376,6 +379,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/login/finish":
                 uid = login_finish(body, "login")
                 return self._send(200, {"ok": True}, cookie=_new_session(uid))
+            if path == "/api/demo/login":
+                # Demo account only, on localhost only, and only with GUARDIAN_DEMO_LOGIN=1 (app/demo.py).
+                if not demo.enabled(ORIGIN):
+                    return self._send(404, {"error": "not found"})
+                uid = demo.login(body.get("username"), body.get("pin"))
+                return self._send(200, {"ok": True}, cookie=_new_session(uid))
             if not s:
                 return self._send(401, {"error": "Please sign in."})
             uid = s["uid"]
@@ -387,6 +396,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, login_begin(uid))
             if path == "/api/stepup/finish":
                 login_finish(body, "stepup", uid)
+                with _state:
+                    s["stepped_up_at"] = time.time()
+                return self._send(200, {"ok": True})
+            if path == "/api/stepup/pin":
+                # The demo account has no passkey: its PIN confirms risky changes instead.
+                if not demo.enabled(ORIGIN):
+                    return self._send(404, {"error": "not found"})
+                demo.confirm(uid, body.get("pin"))
                 with _state:
                     s["stepped_up_at"] = time.time()
                 return self._send(200, {"ok": True})
@@ -474,6 +491,11 @@ def serve(port=PORT, worker=True):
 if __name__ == "__main__":
     httpd, stop = serve()
     print("Guardian on %s (checks every %ds)" % (ORIGIN, core.CHECK_EVERY))
+    if demo.enabled(ORIGIN):
+        demo.ensure_user()
+        print("Demo sign-in is on for username %r (PIN from GUARDIAN_DEMO_PIN, see app/demo.py)" % demo.username())
+    elif os.environ.get("GUARDIAN_DEMO_LOGIN") == "1":
+        print("Demo sign-in stays off: it only works when the app runs on localhost.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

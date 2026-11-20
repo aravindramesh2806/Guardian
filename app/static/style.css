@@ -120,7 +120,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 28px 0 0; }
 /* forms */
 .field { display: flex; flex-direction: column; gap: 6px; }
 label { font-size: 17px; font-weight: 650; }
-input[type=text], input[type=tel], input[type=email] { height: 56px; padding: 0 16px; border-radius: 14px; border: 2px solid var(--field);
+input[type=text], input[type=tel], input[type=email], input[type=password] { height: 56px; padding: 0 16px; border-radius: 14px; border: 2px solid var(--field);
   background: var(--surface); color: var(--ink); font-family: inherit; font-size: 19px; width: 100%; }
 .error { color: var(--bad); background: var(--bad-bg); border-radius: 12px; padding: 12px 14px; font-size: 16px; font-weight: 550; }
 .bubble { align-self: flex-start; max-width: 300px; padding: 12px 14px; border-radius: 18px 18px 18px 6px;
@@ -170,3 +170,12 @@ main > button.secondary { margin-top: 12px; }
 .steps-list li::before { content: counter(step); flex: none; width: 30px; height: 30px; border-radius: 15px; background: var(--accent-soft);
   color: var(--accent); font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 15px; }
 .card.focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.who { display: flex; align-items: center; gap: 6px; }
+.link.small { font-size: 15px; min-height: 44px; }
+.sheet { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(8, 16, 14, 0.55); padding: 16px; }
+.sheet-body { width: 100%; max-width: 440px; background: var(--surface); color: var(--ink); border-radius: 22px;
+  padding: 22px 20px max(20px, env(safe-area-inset-bottom)); }
+.sheet-title { margin: 0; font-size: 22px; letter-spacing: 0; text-transform: none; color: var(--ink); }
+.sheet .field, .sheet label { display: block; }
+h1[tabindex="-1"]:focus { outline: none; }

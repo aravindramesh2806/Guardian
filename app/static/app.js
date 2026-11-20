@@ -121,7 +121,61 @@ async function passkeyGet(begin, finish) {
   const cred = await navigator.credentials.get({ publicKey: options });
   return call(finish, { flow, credential: credentialJSON(cred) });
 }
-const stepUp = () => passkeyGet("/api/stepup/begin", "/api/stepup/finish");
+// How this person confirms risky changes, in words.
+const confirmWith = () => (me && me.demo ? "your demo PIN" : "Face ID or fingerprint");
+
+// Risky changes need a fresh "it's you": Face ID, or the PIN on the demo account (it has no passkey).
+const stepUp = () => (me && me.demo ? askPin() : passkeyGet("/api/stepup/begin", "/api/stepup/finish"));
+
+// A small sheet over the current screen that asks for the demo PIN. Resolves once the server accepts it.
+function askPin() {
+  return new Promise((resolve, reject) => {
+    const pin = el("input", { type: "password", id: "stepup-pin", inputmode: "numeric", autocomplete: "off", maxlength: "8" });
+    const err = errorSlot();
+    const close = () => sheet.remove();
+    const ok = action(el("button", { class: "btn" }, "Confirm"), err, async () => {
+      const res = await fetch("/api/stepup/pin", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: pin.value }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { pin.value = ""; setTimeout(() => pin.focus(), 0); throw new Error(data.error || "That PIN isn't right."); }
+      close(); resolve();
+    });
+    pin.addEventListener("keydown", (e) => { if (e.key === "Enter") ok.click(); });
+    const cancel = el("button", { class: "link", onclick: () => { close(); reject(new Error("Cancelled. Nothing was changed.")); } }, "Cancel");
+    const sheet = el("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-labelledby": "pin-title" },
+      el("div", { class: "sheet-body stack g10" },
+        el("h2", { id: "pin-title", class: "sheet-title" }, "Confirm it's you"),
+        el("p", { class: "muted" }, "Enter your demo PIN to make this change."),
+        el("label", { for: "stepup-pin" }, "PIN"), pin, err, ok, cancel));
+    document.body.append(sheet);
+    pin.focus();
+  });
+}
+
+// Demo sign-in (username and PIN). Only offered when the server has it switched on, on localhost.
+function pinSignIn() {
+  const user = el("input", { type: "text", id: "demo-user", autocomplete: "username", autocapitalize: "none", maxlength: "40" });
+  const pin = el("input", { type: "password", id: "demo-pin", inputmode: "numeric", autocomplete: "current-password", maxlength: "8" });
+  const err = errorSlot();
+  const go = action(el("button", { class: "btn" }, "Sign in"), err, async () => {
+    if (!user.value.trim() || !pin.value.trim()) throw new Error("Type the username and the PIN.");
+    try { await call("/api/demo/login", { username: user.value.trim(), pin: pin.value.trim() }); }
+    catch (e) { pin.value = ""; setTimeout(() => pin.focus(), 0); throw e; }
+    clearSetup();
+    start();
+  });
+  pin.addEventListener("keydown", (e) => { if (e.key === "Enter") go.click(); });
+  show(
+    topBar(null, welcome),
+    el("h1", {}, "Sign in"),
+    el("p", { class: "lead" }, "Use the demo username and PIN."),
+    el("div", { class: "stack mt" },
+      el("div", { class: "field" }, el("label", { for: "demo-user" }, "Username"), user),
+      el("div", { class: "field" }, el("label", { for: "demo-pin" }, "PIN"), pin)),
+    el("div", { class: "mt-s" }, note("warn", "info", "Demo only. Real Guardian accounts sign in with Face ID or fingerprint, never a PIN.")),
+    el("div", { class: "foot" }, err, go));
+  user.focus();
+}
 
 async function register(name, email) {
   const { flow, options } = await call("/api/register/begin", { name, email });
@@ -201,6 +255,7 @@ function welcome() {
       window.PublicKeyCredential ? el("button", { class: "btn", onclick: who }, "Get started")
         : errorBox("This browser can't use passkeys. Please open Guardian in Safari, Chrome or Edge."),
       window.PublicKeyCredential ? signIn : null,
+      me && me.demo_login ? el("button", { class: "link", onclick: pinSignIn }, "Demo sign-in (username and PIN)") : null,
       el("a", { class: "link center", href: "/privacy" }, "What Guardian reads and keeps")));
 }
 
@@ -529,7 +584,7 @@ function solve(threat) {
   const fixes = it.fixes.map((x) => {
     const row = el("div", { class: "card stack g10" }, el("h3", {}, x.label));
     if (x.done) row.append(el("p", { class: "did" }, "Done."));
-    else if (x.can) row.append(el("p", { class: "muted small" }, "You'll confirm with Face ID."),
+    else if (x.can) row.append(el("p", { class: "muted small" }, "You'll confirm with " + confirmWith() + "."),
       action(el("button", { class: "btn" }, icon("face", 24), "Yes, do it"), err, async () => {
         feedCache = await call("/api/approve", { key: x.key });
         solve(threat);
@@ -568,7 +623,7 @@ function render() {
   notice = null;
 
   const needs = f.needs_you.map((n) => el("div", { class: "card" },
-    el("h3", {}, n.ask), el("p", { class: "muted small" }, "You'll confirm with Face ID or fingerprint."),
+    el("h3", {}, n.ask), el("p", { class: "muted small" }, "You'll confirm with " + confirmWith() + "."),
     act(el("button", { class: "btn mt-s" }, "Yes, do it"), () => call("/api/approve", { key: n.key }))));
 
   const v = f.verified || {};
@@ -622,7 +677,7 @@ function render() {
     family = el("div", { class: "card stack g10" },
       el("h3", {}, "Invite " + f.family.name),
       el("p", { class: "muted" }, "They get one text asking if they agree. Nothing else reaches them until they reply YES."),
-      v.fresh ? act(el("button", { class: "btn" }, icon("face", 24), "Confirm with Face ID and send"), () => call("/api/family/invite", {}))
+      v.fresh ? act(el("button", { class: "btn" }, icon("face", 24), "Confirm with " + (me && me.demo ? "your PIN" : "Face ID") + " and send"), () => call("/api/family/invite", {}))
         : el("p", { class: "muted small" }, "First, do the Persona check above. It stops someone with your phone from pointing your alerts at their own number."));
   } else if (f.family && f.family.status === "waiting") {
     family = el("div", { class: "card stack g10" },
@@ -643,11 +698,15 @@ function render() {
     await call("/api/delete", {}); clearInterval(pollTimer); welcome();
   });
   const signOut = action(el("button", { class: "link" }, "Sign out"), err, async () => {
-    await call("/api/logout", {}); clearInterval(pollTimer); welcome();
+    await call("/api/logout", {}); clearInterval(pollTimer); me = await call("/api/me"); welcome();
   });
 
   show(
-    el("div", { class: "top spread" }, el("span", { class: "brand" }, "Guardian"), el("span", { class: "muted small" }, "Hi, " + f.name)),
+    el("div", { class: "top spread" }, el("span", { class: "brand" }, "Guardian"),
+      el("span", { class: "who" }, el("span", { class: "muted small" }, "Hi, " + f.name),
+        action(el("button", { class: "link small" }, "Sign out"), err, async () => {
+          await call("/api/logout", {}); clearInterval(pollTimer); me = await call("/api/me"); welcome();
+        }))),
     hero(f), banner ? el("div", { class: "mt-s" }, banner) : null, err,
     el("div", { class: "card rows mt-s" }, ...rows),
     act(el("button", { class: "btn2 mt-s" }, "Check now"), () => call("/api/check-now", {})),
