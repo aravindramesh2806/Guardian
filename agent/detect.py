@@ -102,8 +102,9 @@ def phishing_score(message, known_domains):
     if sender not in known_domains:
         # A real domain used as a prefix, e.g. examplebank.example.evil.test: the real owner is evil.test.
         hidden = next((d for d in known_domains if sender.startswith(d + ".")), None)
-        best = max(known_domains, key=lambda d: difflib.SequenceMatcher(None, sender, d).ratio())
-        ratio = difflib.SequenceMatcher(None, sender, best).ratio()
+        # A real person's account list can start empty (before they name their bank): no lookalike check then.
+        best = max(known_domains, key=lambda d: difflib.SequenceMatcher(None, sender, d).ratio()) if known_domains else ""
+        ratio = difflib.SequenceMatcher(None, sender, best).ratio() if best else 0.0
         if hidden:
             score += 0.5
             reasons.append("sender %s starts with %s but belongs to someone else" % (sender, hidden))

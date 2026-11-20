@@ -290,6 +290,215 @@ class PersonaInApp(unittest.TestCase):
         self.assertIn("isn't set up", str(e.exception))
 
 
+class FakeGoogle:
+    """Google's OAuth and Gmail endpoints, enough for Guardian: token, refresh, revoke, profile, list, get."""
+
+    def __init__(self, scope=None):
+        import base64 as b64
+        import http.server
+        import urllib.parse as up
+        self.calls, self.revoked, self.scope = [], [], scope or "https://www.googleapis.com/auth/gmail.readonly"
+        now_ms = int(time.time() * 1000)
+
+        def message(mid, sender, subject, body, link):
+            text = body + " " + link
+            return {"id": mid, "internalDate": str(now_ms), "payload": {
+                "headers": [{"name": "From", "value": sender}, {"name": "Subject", "value": subject}],
+                "mimeType": "text/plain", "body": {"data": b64.urlsafe_b64encode(text.encode()).decode()}}}
+        self.messages = {
+            "g1": message("g1", "Security <alerts@rnybank.com>", "Your account is on hold",
+                          "Verify immediately or your account will be suspended. Log in to confirm your details.",
+                          "http://rnybank-login.test/verify"),
+            "g2": message("g2", "Pat <pat@friends.example>", "Lunch?", "Lunch on Thursday?", ""),
+        }
+        fake = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def reply(self, obj, code=200):
+                raw = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_POST(self):
+                form = dict(up.parse_qsl(self.rfile.read(int(self.headers["Content-Length"])).decode()))
+                fake.calls.append(("POST", self.path, form.get("grant_type")))
+                if self.path == "/token" and form.get("grant_type") == "authorization_code":
+                    if form.get("code") != "good-code" or not form.get("code_verifier"):
+                        return self.reply({"error": "invalid_grant"}, 400)
+                    return self.reply({"access_token": "AT-1", "refresh_token": "RT-secret-123", "expires_in": 3600,
+                                       "scope": fake.scope})
+                if self.path == "/token" and form.get("grant_type") == "refresh_token":
+                    return self.reply({"access_token": "AT-2", "expires_in": 3600})
+                if self.path == "/revoke":
+                    fake.revoked.append(form.get("token"))
+                    return self.reply({})
+                self.reply({"error": "not found"}, 404)
+
+            def do_GET(self):
+                path = self.path.split("?")[0]
+                fake.calls.append(("GET", path, None))
+                if self.headers.get("Authorization") not in ("Bearer AT-1", "Bearer AT-2"):
+                    return self.reply({"error": "unauthorized"}, 401)
+                if path == "/gmail/v1/users/me/profile":
+                    return self.reply({"emailAddress": "rose.real@example.com"})
+                if path == "/gmail/v1/users/me/messages":
+                    return self.reply({"messages": [{"id": k} for k in fake.messages]})
+                mid = path.rsplit("/", 1)[-1]
+                if mid in fake.messages:
+                    return self.reply(fake.messages[mid])
+                self.reply({"error": "not found"}, 404)
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        base = "http://127.0.0.1:%d" % self.server.server_port
+        import gmail
+        gmail.AUTH_URL, gmail.TOKEN_URL, gmail.REVOKE_URL = base + "/auth", base + "/token", base + "/revoke"
+        gmail.API_URL = base + "/gmail/v1"
+
+    def gets(self, path_part):
+        return [c for c in self.calls if c[0] == "GET" and path_part in c[1]]
+
+
+class GmailInApp(unittest.TestCase):
+    def setUp(self):
+        import gmail
+        self.gmail = gmail
+        for k, v in (("GOOGLE_CLIENT_ID", "cid"), ("GOOGLE_CLIENT_SECRET", "csecret")):
+            os.environ[k] = v
+            self.addCleanup(os.environ.pop, k, None)
+        self.google = FakeGoogle()
+        self.addCleanup(self.google.server.shutdown)
+
+    def connected_user(self):
+        uid = new_user()
+        tokens = self.gmail.exchange_code("good-code", "http://localhost/cb", "verifier")
+        core.connect_gmail(uid, tokens)
+        core.set_accounts(uid, ["mybank.com"])
+        core.run_for(uid)
+        return uid
+
+    def test_sign_in_asks_for_read_only_with_pkce(self):
+        import urllib.parse as up
+        url, state, verifier = self.gmail.auth_url("http://localhost:8800/oauth/google/callback")
+        q = dict(up.parse_qsl(url.split("?", 1)[1]))
+        self.assertEqual(q["scope"], "https://www.googleapis.com/auth/gmail.readonly")
+        self.assertEqual((q["code_challenge_method"], q["access_type"], q["state"]), ("S256", "offline", state))
+        self.assertNotIn(verifier, url)
+
+    def test_wider_or_missing_permission_is_refused(self):
+        self.google.scope = "https://www.googleapis.com/auth/userinfo.email"
+        with self.assertRaises(self.gmail.GmailError):
+            self.gmail.exchange_code("good-code", "http://localhost/cb", "v")
+        with self.assertRaises(self.gmail.GmailError):
+            self.gmail.exchange_code("bad-code", "http://localhost/cb", "v")
+
+    def test_shadow_mode_flags_but_acts_on_nothing(self):
+        uid = self.connected_user()
+        f = core.feed(uid)
+        self.assertEqual((f["data_source"], f["shadow"], f["gmail"]["email"]), ("gmail", True, "rose.real@example.com"))
+        phish = [i for i in f["items"] if "rnybank" in i["summary"]]
+        self.assertEqual(len(phish), 1)
+        self.assertEqual(phish[0]["did"], [])
+        self.assertIn("Quarantine", phish[0]["would"])
+        self.assertFalse(any("Lunch" in i["summary"] for i in f["items"]))
+        self.assertFalse(any("paylinc" in i["summary"] for i in f["items"]))  # no sample data left
+        self.assertFalse(os.path.exists(os.path.join(USERS_TMP, uid, "outbox", "quarantine.jsonl")))
+
+    def test_tokens_and_mail_are_never_stored_in_plain_text(self):
+        uid = self.connected_user()
+        folder = os.path.join(USERS_TMP, uid)
+        for name in (self.gmail.TOKENS, self.gmail.CACHE):
+            raw = open(os.path.join(folder, name), "rb").read()
+            self.assertNotIn(b"RT-secret-123", raw)
+            self.assertNotIn(b"Lunch", raw)
+            self.assertNotIn(b"rnybank", raw)
+        self.assertEqual(json.load(open(os.path.join(folder, "data", "inbox.json"))), [])  # nothing at rest in data/
+
+    def test_messages_are_fetched_once_and_tokens_refresh(self):
+        import vault
+        uid = self.connected_user()
+        first = len(self.google.gets("/messages/g"))
+        folder = os.path.join(USERS_TMP, uid)
+        tokens = vault.read_json(folder, self.gmail.TOKENS)
+        tokens["expires_at"] = 0  # expired
+        vault.write_json(folder, self.gmail.TOKENS, tokens)
+        core.run_for(uid)
+        self.assertEqual(len(self.google.gets("/messages/g")), first)  # cached: not fetched again
+        self.assertIn(("POST", "/token", "refresh_token"), self.google.calls)
+        self.assertEqual(vault.read_json(folder, self.gmail.TOKENS)["access_token"], "AT-2")
+
+    def test_retention_drops_old_mail_and_logs(self):
+        import vault
+        uid = self.connected_user()
+        folder = os.path.join(USERS_TMP, uid)
+        cache = vault.read_json(folder, self.gmail.CACHE)
+        cache["old"] = {"id": "old", "from": "x@y.example", "subject": "old", "body": "", "links": [],
+                        "received": "2020-01-01T00:00:00"}
+        vault.write_json(folder, self.gmail.CACHE, cache)
+        runs = os.path.join(folder, "runs")
+        old_log = os.path.join(runs, os.listdir(runs)[0])
+        os.utime(old_log, (time.time() - 40 * 86400,) * 2)
+        self.assertGreaterEqual(core.retention(uid), 1)
+        self.assertFalse(os.path.exists(old_log))
+        self.assertNotIn("old", vault.read_json(folder, self.gmail.CACHE))
+
+    def test_delete_revokes_google_and_destroys_the_key(self):
+        uid = self.connected_user()
+        core.delete_user(uid)
+        self.assertIn("RT-secret-123", self.google.revoked)
+        self.assertFalse(os.path.exists(os.path.join(USERS_TMP, uid)))
+
+    def test_disconnect_revokes_and_forgets_mail(self):
+        uid = self.connected_user()
+        core.disconnect_gmail(uid)
+        self.assertIn("RT-secret-123", self.google.revoked)
+        self.assertFalse(os.path.exists(os.path.join(USERS_TMP, uid, self.gmail.CACHE)))
+        self.assertEqual(core.feed(uid)["data_source"], "none")
+
+    def test_another_master_key_cannot_read_anything(self):
+        import vault
+        from cryptography.fernet import Fernet
+        uid = self.connected_user()
+        saved = vault._master
+        vault._master = Fernet(Fernet.generate_key())
+        try:
+            with self.assertRaises(vault.VaultError):
+                vault.read_json(os.path.join(USERS_TMP, uid), self.gmail.TOKENS)
+        finally:
+            vault._master = saved
+
+    def test_bad_account_addresses_are_refused(self):
+        uid = new_user()
+        with self.assertRaises(core.AppError):
+            core.set_accounts(uid, ["not a site"])
+        self.assertEqual(core.set_accounts(uid, ["https://www.MyBank.com/login", "mybank.com"]), ["mybank.com"])
+
+    @unittest.skipIf(server is None, "webauthn not installed")
+    def test_callback_needs_the_state_its_own_session_made(self):
+        httpd, _ = server.serve(port=0, worker=False)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        port = httpd.server_address[1]
+
+        def get(path):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+            conn.request("GET", path)
+            r = conn.getresponse()
+            return r.read().decode()
+        self.assertIn("gmail_error", get("/oauth/google/callback?state=forged&code=good-code"))
+        uid = new_user()
+        server.oauth_flows["st-1"] = {"uid": uid, "verifier": "v", "created": time.time()}
+        self.assertIn("/?gmail=connected", get("/oauth/google/callback?state=st-1&code=good-code"))
+        self.assertEqual(core.feed(uid)["data_source"], "gmail")
+        self.assertIn("gmail_error", get("/oauth/google/callback?state=st-1&code=good-code"))  # used once
+
+
 def tearDownModule():
     shutil.rmtree(USERS_TMP, ignore_errors=True)
 

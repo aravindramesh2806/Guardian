@@ -60,7 +60,28 @@ python3 -m venv .venv && .venv/bin/pip install -r app/requirements.txt
   `.env`, then run `cd persona && npm install && node server.js` beside the app. The home screen offers
   "Verify with Persona" whenever card locks need it; each person's pass is kept in their own store for 24
   hours. Persona's page blocks headless browsers, so do the check in a normal browser.
+- **Gmail (read-only, shadow mode):** set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (see "Connecting
+  Gmail" below). The home screen then offers **Connect Gmail**. Guardian asks only for `gmail.readonly`, syncs
+  the last two days of new mail every check, and in shadow mode says what it *would* have done and acts on
+  nothing. Name your bank and main accounts on the home screen so lookalike senders get caught.
+- **Privacy:** message text and Gmail tokens are stored encrypted with a key per person, sealed by
+  `GUARDIAN_MASTER_KEY` (kept outside `users/`). Mail and check logs older than 30 days are deleted.
+  "Delete my data" destroys the key first, cancels Google access, then removes everything. The app's
+  "What Guardian reads and keeps" page (`/privacy`) says this in plain words.
 - **Tests:** `.venv/bin/python -m unittest discover -s tests -t .` and the browser test `tests/e2e_app.js`.
+
+### Connecting Gmail (Google Cloud, about 15 minutes)
+
+1. <https://console.cloud.google.com/> > create a project (e.g. "Guardian").
+2. APIs & Services > Library > **Gmail API** > Enable.
+3. APIs & Services > OAuth consent screen: User type **External**, app name "Guardian", your email as
+   support and developer contact. Scopes: add `.../auth/gmail.readonly`. Test users: **add your Gmail
+   address**. Leave it in **Testing** (up to 100 named test users; no Google review needed).
+4. APIs & Services > Credentials > Create credentials > **OAuth client ID** > Web application.
+   Authorized redirect URI: `http://localhost:8800/oauth/google/callback`.
+5. Copy the client ID and secret into `.env` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, restart the
+   app, and tap **Connect Gmail** on the home screen. Google will warn that the app is unverified: that is
+   expected in Testing mode; choose Continue.
 - **Not yet:** real Gmail, push notifications while the app is closed (needs HTTPS and VAPID keys), real
   SMS for family consent, and a phone install (needs HTTPS on a real domain).
 
