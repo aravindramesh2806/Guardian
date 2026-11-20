@@ -7,7 +7,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent import detect, flags, respond
+from agent import detect, flags, metrics, respond
 from agent import store as st
 from agent.audit import AuditLog
 
@@ -59,6 +59,7 @@ def handle(threat, ctx):
 
 
 def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None):
+    started = time.time()
     run_id = "run-" + time.strftime("%Y%m%d-%H%M%S") + "-%04d" % (int(time.time() * 1000) % 10000)
     run_dir = run_dir or os.path.join(ROOT, "runs")
     ctx = {
@@ -87,8 +88,14 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
         "family_told": count(lambda a: a["action"] == "notify_trusted" and a["status"].endswith("(simulated)")),
         "waiting_for_you": count(lambda a: a["status"] == "waiting for you"),
         "gates": ctx["flags"],
+        "started_ms": int(started * 1000),
+        "duration_ms": int((time.time() - started) * 1000),
         "results": results,
     }
+    # KPI events for Amplitude and Statsig (sent only when their keys are set).
+    events = metrics.build_events(summary, ctx["profile"], user_id=ctx["profile"].get("user_id", "demo-user"))
+    summary["metrics"] = {"events": len(events),
+                          "sent": metrics.send(events, os.path.join(run_dir, run_id + ".jsonl.errors"))}
     with open(os.path.join(run_dir, run_id + ".summary.json"), "w") as f:
         json.dump(summary, f, indent=2, default=str)
     return summary

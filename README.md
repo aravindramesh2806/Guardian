@@ -42,6 +42,7 @@ data/ (inbox, calls, card charges, receipts, breach feed)
   -> agent/respond.py   decide actions -> guard (gates, Persona check, consent) -> act or hold
   -> agent/store.py     write back every threat and action, so nothing repeats
   -> agent/audit.py     one event per step, locally and to Amplitude
+  -> agent/metrics.py   KPI events (threats, stopped, money protected, automation rate) to Amplitude + Statsig
   -> agent/brief.py     3-5 line daily brief and the evidence page
 ```
 
@@ -61,6 +62,32 @@ family alerts, disputes). Replacing one with a real integration changes only its
 
 Roadmap: Airbyte (live Gmail, phone and card sync), Parakeet on SIE (voicemail transcription),
 cognee (what is normal for this person), Personal Agent Protocol (reaching banks and stores directly).
+
+## Metrics in Amplitude and Statsig
+
+`agent/metrics.py` sends the same KPI events to both tools after every run (only when their keys are set):
+
+| Event | One per | Key properties |
+|---|---|---|
+| `guardian_run_completed` | run | threats, new_threats, stopped, waiting_for_you, family_told, money_protected_usd, automation_rate, threats_by_kind, held_reasons, duration_ms, gates |
+| `guardian_threat_detected` | new threat | threat_kind, severity, channel, decided_by, score, auto_handled |
+| `guardian_action_completed` | action | action_type, outcome (done/held), automated, held_reason |
+| `guardian_needs_attention` | held action | action_type, reason, ask |
+| `guardian_family_notified` | trusted contact told | threat_kind, channel |
+| `guardian_money_protected` | card charge stopped | amount_usd, merchant, how |
+| `guardian_report_viewed`, `guardian_threat_opened` | report page (Amplitude and Statsig web) | run_id, threat_kind |
+
+User properties: protection_mode, cards/emails/accounts monitored, trusted contacts (and consent), persona_verified,
+plus lifetime counters (`lifetime_threats`, `lifetime_stopped`, `lifetime_money_protected_usd`, ...).
+Every event has an `insert_id`, so sending a run twice never double counts, and a `session_id` per run.
+
+To fill the dashboards with history, run `python3 agent/backfill.py --days 30 --users 40` (add `--dry-run`
+to see counts first). It simulates daily runs for fictional users through the real decide and guard rules.
+Every backfilled user id starts with `synthetic-` and every event has `is_synthetic: true`, so filter on that.
+
+Charts to build: daily threats by kind (`guardian_threat_detected` grouped by threat_kind), threats stopped
+and automation rate (`guardian_run_completed` averages), money protected (sum of `amount_usd`), funnel
+detected -> action done, held actions by reason, and senior_protection on vs off (gates.senior_protection).
 
 ## Team setup
 

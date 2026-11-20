@@ -7,10 +7,10 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-for _k in ("SIE_BASE_URL", "SINGLESTORE_HOST", "AMPLITUDE_API_KEY"):
+for _k in ("SIE_BASE_URL", "SINGLESTORE_HOST", "AMPLITUDE_API_KEY", "STATSIG_SERVER_SECRET", "STATSIG_CLIENT_KEY"):
     os.environ.pop(_k, None)
 
-from agent import brief, detect, flags, respond
+from agent import backfill, brief, detect, flags, metrics, respond
 from agent import run as runner
 from agent import store as st
 
@@ -219,3 +219,55 @@ class FlagTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MetricsTests(Base):
+    def events(self, summary):
+        return metrics.build_events(summary, detect.load("profile.json", self.data))
+
+    def test_first_run_kpis(self):
+        s = self.run_once()
+        ev = self.events(s)
+        types = [e["event_type"] for e in ev]
+        self.assertEqual(types.count("guardian_threat_detected"), 8)
+        self.assertEqual(types.count("guardian_run_completed"), 1)
+        self.assertEqual(types.count("guardian_family_notified"), s["family_told"])
+        self.assertEqual(types.count("guardian_needs_attention"), s["waiting_for_you"])
+        run = next(e for e in ev if e["event_type"] == "guardian_run_completed")["event_properties"]
+        self.assertEqual(run["money_protected_usd"], 389.0)
+        self.assertEqual(sum(run["threats_by_kind"].values()), 8)
+        self.assertEqual(len({e["insert_id"] for e in ev}), len(ev))
+        self.assertEqual(len({e["session_id"] for e in ev}), 1)
+
+    def test_second_run_counts_nothing_twice(self):
+        self.run_once()
+        ev = self.events(self.run_once())
+        types = {e["event_type"] for e in ev}
+        self.assertNotIn("guardian_threat_detected", types)
+        self.assertNotIn("guardian_money_protected", types)
+        self.assertIn("guardian_needs_attention", types)  # the dispute is still waiting
+        run = next(e for e in ev if e["event_type"] == "guardian_run_completed")
+        self.assertTrue(run["event_properties"]["all_clear"])
+        self.assertEqual(run["user_properties"]["$add"]["lifetime_threats"], 0)
+
+    def test_nothing_sent_without_keys(self):
+        s = self.run_once()
+        self.assertEqual(s["metrics"]["sent"], {"amplitude": 0, "statsig": 0})
+
+    def test_statsig_shape(self):
+        ev = self.events(self.run_once())
+        money = metrics.to_statsig(next(e for e in ev if e["event_type"] == "guardian_money_protected"))
+        self.assertEqual(money["value"], 389.0)
+        self.assertTrue(all(isinstance(v, str) for v in money["metadata"].values()))
+
+    def test_backfill_is_synthetic_and_repeatable(self):
+        a = backfill.build(days=5, users=4, seed=1, now=1.8e9)
+        b = backfill.build(days=5, users=4, seed=1, now=1.8e9)
+        self.assertEqual([e["insert_id"] for e in a], [e["insert_id"] for e in b])
+        self.assertTrue(all(e["user_id"].startswith("synthetic-") for e in a))
+        self.assertTrue(all(e["event_properties"]["is_synthetic"] for e in a))
+
+    def test_report_has_amplitude_tag_only_with_key(self):
+        s = self.run_once()
+        self.assertEqual(brief.amplitude_script(s, ""), "")
+        self.assertIn("guardian_threat_opened", brief.amplitude_script(s, "k"))

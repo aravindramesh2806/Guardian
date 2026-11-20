@@ -69,6 +69,32 @@ def statsig_script(summary, client_key):
     return STATSIG_SCRIPT % (json.dumps(client_key), json.dumps(summary["run_id"]), json.dumps(meta))
 
 
+AMPLITUDE_SCRIPT = """<script>
+// Amplitude: the same two report events as Statsig, so viewing the evidence shows up in both tools.
+(() => {
+  const key = %s, base = %s, session = Date.now();
+  const send = (event_type, props) => fetch("https://api2.amplitude.com/2/httpapi", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: key, events: [{ user_id: %s, event_type, session_id: session,
+      time: Date.now(), platform: "Web", event_properties: Object.assign({}, base, props) }] }),
+  }).catch((e) => console.error("Amplitude send failed", e));
+  send("guardian_report_viewed", {});
+  document.querySelectorAll("details[data-kind]").forEach((d) => d.addEventListener("toggle", () => {
+    if (d.open) send("guardian_threat_opened", { threat_kind: d.dataset.kind, threat: d.dataset.threat });
+  }));
+})();
+</script>"""
+
+
+def amplitude_script(summary, api_key, user_id="demo-user"):
+    """Amplitude tag for the page, or nothing when no key is set. The project API key is browser-safe."""
+    if not api_key:
+        return ""
+    base = {"run_id": summary["run_id"], "threats": summary["threats"], "stopped": summary["stopped"],
+            "waiting_for_you": summary["waiting_for_you"], "family_told": summary.get("family_told", 0)}
+    return AMPLITUDE_SCRIPT % (json.dumps(api_key), json.dumps(base), json.dumps(user_id))
+
+
 def gate_badge(summary):
     """One line showing which gates were on for this run and who decided."""
     gates = summary.get("gates") or {}
@@ -117,10 +143,11 @@ section{border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:
 h2{font-size:17px}.tag{color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;text-transform:uppercase}
 .ev,code{font-size:12px;color:var(--muted);word-break:break-word}.brief{white-space:pre-line;font-size:16px}</style>
 </head><body><h1>Guardian</h1><p class="brief">%s</p>
-<p class="ev">Run %s · data: %s · Persona check: %s</p>%s%s%s</body></html>""" % (
+<p class="ev">Run %s · data: %s · Persona check: %s</p>%s%s%s%s</body></html>""" % (
         html.escape("\n".join(brief_lines(summary))), html.escape(summary["run_id"]),
         html.escape(summary["store"]), html.escape(str(summary["persona"])), gate_badge(summary),
-        "".join(cards), statsig_script(summary, client_key))
+        "".join(cards), statsig_script(summary, client_key),
+        amplitude_script(summary, os.environ.get("AMPLITUDE_API_KEY", "")))
     with open(out, "w") as f:
         f.write(page)
     return out
