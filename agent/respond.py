@@ -5,8 +5,36 @@ Actions are simulated into the outbox folder. Swapping a simulated action for a 
 """
 import json
 import os
+from datetime import datetime, timedelta
 
-from agent import models
+from agent import firedrill, models
+
+# How a finished action's status ends: written to the local outbox, or carried out on a Firedrill service.
+DONE_SUFFIXES = ("(simulated)", "(firedrill)")
+# An action whose service failed. It is not "done", so the next run tries it again.
+FAILED = "failed, will retry"
+
+
+def is_done(status):
+    return isinstance(status, str) and status.endswith(DONE_SUFFIXES)
+
+
+UNDO = {"quarantine": "moved back to the inbox", "block_number": "unblocked", "lock_card": "unlocked"}
+
+
+def undo(action_row, outbox_dir):
+    """Reverse one finished action after the person said "this was real". Returns the new status, or None.
+
+    Alerts and family messages cannot be unsent; a filed dispute is withdrawn with the bank.
+    """
+    kind = action_row["action"]
+    if kind == "dispute":
+        _append(outbox_dir, "undo.jsonl", {"action": action_row["action_key"], "undo": "withdraw dispute"})
+        return "dispute withdrawn (simulated undo)"
+    if kind not in UNDO:
+        return None
+    _append(outbox_dir, "undo.jsonl", {"action": action_row["action_key"], "undo": UNDO[kind]})
+    return "%s (simulated undo)" % UNDO[kind]
 
 STEPS = {
     "identity_breach": [
@@ -53,6 +81,11 @@ def decide(threat, profile):
             acts.append({"type": "notify_trusted", "key": "notify:%s:%s" % (c["address"], threat["key"]),
                          "contact": c})
         return acts
+    if threat["kind"] == "card_misuse" and ev.get("small"):
+        # A small unknown charge is more often parking than fraud: ask before locking, no dispute.
+        return [{"type": "lock_card", "key": "lock:" + ev["card"], "card": ev["card"], "ask_first": True,
+                 "merchant": ev["merchant"], "amount": ev["amount"]},
+                {"type": "alert", "key": "alert:" + threat["key"]}]
     if threat["kind"] in ("merchant_breach", "card_misuse"):
         acts = [{"type": "lock_card", "key": "lock:" + ev["card"], "card": ev["card"]}]
         if threat["kind"] == "card_misuse":
@@ -62,8 +95,29 @@ def decide(threat, profile):
     return [{"type": "alert", "key": "alert:" + threat["key"]}]
 
 
-def guard(action, gates, verification, profile):
-    """May this action run now? Returns (allowed, reason)."""
+CLAIM_MAX_AGE = timedelta(hours=24)
+
+
+def _parse_time(ts):
+    """ISO time, naive or with an offset ("Z" too), as naive local time."""
+    d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
+
+
+def claim_fresh(verification, now):
+    """A Persona pass counts for 24 hours. Missing, unreadable or future times do not count."""
+    try:
+        age = _parse_time(now) - _parse_time(verification["checked_at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return timedelta(minutes=-5) <= age <= CLAIM_MAX_AGE
+
+
+def guard(action, gates, verification, profile, now=None, approved=()):
+    """May this action run now? Returns (allowed, reason).
+
+    `now` turns on the Persona freshness check. `approved` holds the action keys the person said yes to.
+    """
     if action["type"] == "alert":
         return True, "alerts always go to you"
     if gates.get("kill_switch"):
@@ -79,8 +133,12 @@ def guard(action, gates, verification, profile):
             return False, "family alerts are off"
         return True, "%s agreed to be told about serious scams" % action["contact"]["name"]
     if action["type"] == "lock_card":
+        if action.get("ask_first") and action["key"] not in approved:
+            return False, "a small charge you may have made: Guardian asks before locking your card"
         if verification.get("result") != "passed":
             return False, "no verified person behind this agent yet (Persona check not passed)"
+        if now is not None and not claim_fresh(verification, now):
+            return False, "the Persona check is more than 24 hours old; verify again"
         if not gates.get("auto_lock_card"):
             return False, "auto-lock is off"
         c = card(profile, action["card"])
@@ -88,6 +146,8 @@ def guard(action, gates, verification, profile):
             return False, "the card issuer has no lock option for agents; call them"
         return True, "verified person, auto-lock on, issuer supports locking"
     if action["type"] == "dispute":
+        if action["key"] in approved:
+            return True, "you approved it"
         if gates.get("dispute_needs_approval", True):
             return False, "disputes wait for your confirmation"
         return True, "auto-dispute is on"
@@ -120,8 +180,15 @@ def _append(outbox_dir, name, record):
 
 
 def act(action, threat, profile, outbox_dir):
-    """Carry out one allowed action (simulated). Returns the result record."""
+    """Carry out one allowed action. Returns the result record.
+
+    Quarantine and family alerts go to Firedrill's synthetic Gmail and Slack when their addresses are set;
+    everything else is simulated into the outbox. A service error raises; run.handle records it as FAILED.
+    """
     if action["type"] == "quarantine":
+        if firedrill.configured("gmail"):
+            firedrill.quarantine(action["email"])
+            return {"status": "quarantined (firedrill)", "label": firedrill.QUARANTINE_LABEL}
         path = _append(outbox_dir, "quarantine.jsonl", {"email": action["email"], "label": "Guardian/Quarantine"})
         return {"status": "quarantined (simulated)", "file": path}
     if action["type"] == "lock_card":
@@ -138,12 +205,18 @@ def act(action, threat, profile, outbox_dir):
         c = action["contact"]
         msg = "Guardian: %s just got a likely scam (%s). It has been blocked. You may want to check in." % (
             profile["name"].split(" ")[0], threat["summary"])
+        if firedrill.configured("slack"):
+            channel = firedrill.tell_family(msg, action["key"])
+            return {"status": "%s told in #%s (firedrill)" % (c["name"], channel), "text": msg,
+                    "to": c["name"], "channel": "Slack #%s" % channel}
         path = _append(outbox_dir, "family_alerts.jsonl", {"to": c["name"], "channel": c["channel"], "text": msg})
-        return {"status": "%s told (simulated)" % c["name"], "file": path, "text": msg}
+        return {"status": "%s told (simulated)" % c["name"], "file": path, "text": msg,
+                "to": c["name"], "channel": c["channel"]}
     if action["type"] == "alert":
         text, drafted_by = alert_text(threat, profile)
         path = _append(outbox_dir, "alerts.jsonl", {"threat": threat["key"], "severity": threat["severity"], "text": text})
-        return {"status": "alert sent (simulated)", "file": path, "drafted_by": drafted_by, "text": text}
+        return {"status": "alert sent (simulated)", "file": path, "drafted_by": drafted_by, "text": text,
+                "to": profile["name"].split(" ")[0], "channel": "Guardian app"}
     raise ValueError("unknown action " + action["type"])
 
 
@@ -153,4 +226,8 @@ def held(action, threat, profile, reason):
         return {"status": "waiting for you", "reason": reason,
                 "ask": "Dispute $%.2f at %s on card ending %s?" % (
                     action["amount"], action["merchant"], card(profile, action["card"])["last4"])}
+    if action["type"] == "lock_card" and action.get("ask_first"):
+        return {"status": "waiting for you", "reason": reason,
+                "ask": "Lock card ending %s? You may not recognise $%.2f at %s." % (
+                    card(profile, action["card"])["last4"], action["amount"], action["merchant"])}
     return {"status": "waiting for you", "reason": reason}
