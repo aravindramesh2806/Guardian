@@ -1,0 +1,14 @@
+{
+  "name": "guardian-persona-sidecar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Persona Relay sidecar: writes data/verification.json from a live_human_presence claim",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/relay.test.js"
+  },
+  "dependencies": {
+    "@persona/relay": "0.2.2",
+    "@persona/sdk-node": "0.5.1"
+  }
+}
