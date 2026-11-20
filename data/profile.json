@@ -1,0 +1,83 @@
+{
+  "_note": "Fictional demo person. All domains use the reserved .example TLD.",
+  "name": "Rose (demo user, 78)",
+  "emails": [
+    "rose.demo@example.com",
+    "rose.shops@example.net"
+  ],
+  "cards": [
+    {
+      "id": "card-visa-4821",
+      "last4": "4821",
+      "issuer": "Example Bank",
+      "issuer_lock_api": true
+    },
+    {
+      "id": "card-mc-0937",
+      "last4": "0937",
+      "issuer": "Sample Credit Union",
+      "issuer_lock_api": false
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Example Bank",
+      "domain": "examplebank.example"
+    },
+    {
+      "name": "ShopNest",
+      "domain": "shopnest.example"
+    },
+    {
+      "name": "StreamBox",
+      "domain": "streambox.example"
+    },
+    {
+      "name": "PayLink",
+      "domain": "paylink.example"
+    },
+    {
+      "name": "FitTrack",
+      "domain": "fittrack.example"
+    }
+  ],
+  "usual_merchants": [
+    "Green Grocer",
+    "City Transit",
+    "StreamBox"
+  ],
+  "started_actions": [
+    {
+      "domain": "streambox.example",
+      "action": "password_reset",
+      "at": "2026-11-20T08:55:00"
+    }
+  ],
+  "protection": "senior",
+  "trusted_contacts": [
+    {
+      "name": "Sam (daughter)",
+      "channel": "sms",
+      "address": "+1-555-0142",
+      "consent": true
+    }
+  ],
+  "phone_contacts": [
+    {
+      "name": "Example Bank",
+      "number": "+1-555-0199"
+    },
+    {
+      "name": "Green Pharmacy",
+      "number": "+1-555-0150"
+    },
+    {
+      "name": "Alex (grandson)",
+      "number": "+1-555-0177"
+    },
+    {
+      "name": "Sam (daughter)",
+      "number": "+1-555-0142"
+    }
+  ]
+}

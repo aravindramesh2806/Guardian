@@ -1,0 +1,50 @@
+[
+  {
+    "id": "BR-1101",
+    "name": "ShopNest customer database",
+    "disclosed": "2026-11-19",
+    "merchant": "ShopNest",
+    "domains": [
+      "shopnest.example"
+    ],
+    "affected_emails": [],
+    "data_types": [
+      "email",
+      "name",
+      "shipping address",
+      "partial card number"
+    ]
+  },
+  {
+    "id": "BR-1088",
+    "name": "FitTrack forum leak",
+    "disclosed": "2026-11-18",
+    "merchant": null,
+    "domains": [
+      "fittrack.example"
+    ],
+    "affected_emails": [
+      "rose.demo@example.com"
+    ],
+    "data_types": [
+      "email",
+      "password hash"
+    ]
+  },
+  {
+    "id": "BR-0920",
+    "name": "Retro arcade site",
+    "disclosed": "2026-09-20",
+    "merchant": null,
+    "domains": [
+      "retroarcade.example"
+    ],
+    "affected_emails": [
+      "someone.else@example.org"
+    ],
+    "data_types": [
+      "email",
+      "username"
+    ]
+  }
+]
