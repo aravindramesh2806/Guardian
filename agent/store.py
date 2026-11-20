@@ -21,6 +21,8 @@ SCHEMA = [
         action_key VARCHAR(128) PRIMARY KEY, approved_at VARCHAR(32))""",
     """CREATE TABLE IF NOT EXISTS feedback (
         threat_key VARCHAR(128) PRIMARY KEY, label VARCHAR(16), at VARCHAR(32))""",
+    """CREATE TABLE IF NOT EXISTS claims (
+        claim_type VARCHAR(64) PRIMARY KEY, result VARCHAR(16), checked_at VARCHAR(32), source VARCHAR(64))""",
     """CREATE TABLE IF NOT EXISTS verdicts (
         item_key VARCHAR(128) PRIMARY KEY, label VARCHAR(16), decided_by VARCHAR(128), created_at VARCHAR(32))""",
 ]
@@ -107,6 +109,18 @@ def reset(store):
     store.exec("DELETE FROM feedback")
 
 
+def save_claim(store, claim_type, result, checked_at, source):
+    """A Persona claim result for this person (the agent prefers this to data/verification.json)."""
+    store.exec("DELETE FROM claims WHERE claim_type = %s", (claim_type,))
+    store.exec("INSERT INTO claims (claim_type, result, checked_at, source) VALUES (%s, %s, %s, %s)",
+               (claim_type, result, checked_at, source))
+
+
+def claim(store, claim_type="live_human_presence"):
+    found = store.rows("SELECT claim_type, result, checked_at, source FROM claims WHERE claim_type = %s", (claim_type,))
+    return found[0] if found else None
+
+
 def approve(store, action_key, at):
     """The person said yes to a held action (a dispute, or locking a card over a small charge)."""
     store.exec("DELETE FROM approvals WHERE action_key = %s", (action_key,))
@@ -168,6 +182,15 @@ def waiting(store):
 def save_threat(store, t, run_id, at):
     store.exec("INSERT INTO threats (threat_key, kind, severity, summary, run_id, created_at) "
                "VALUES (%s, %s, %s, %s, %s, %s)", (t["key"], t["kind"], t["severity"], t["summary"], run_id, at))
+
+
+STARTED = "started"
+
+
+def mark_started(store, action, threat_key, run_id, at):
+    """Written just before an action runs. If Guardian dies mid-action, this stays, and the action is not
+    repeated blindly next time (at most once): the person is asked to check instead."""
+    save_action(store, action, threat_key, {"status": STARTED}, run_id, at)
 
 
 def save_action(store, action, threat_key, result, run_id, at):

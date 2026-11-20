@@ -36,7 +36,15 @@ STEP_UP_SECONDS = 300
 FLOW_SECONDS = 300
 SESSION_SECONDS = 30 * 24 * 3600
 
+PERSONA_URL = os.environ.get("GUARDIAN_PERSONA_URL", "http://127.0.0.1:8787")
+WIDGET = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "persona", "node_modules", "@persona", "relay", "dist", "relay.umd.js")
+VERIFY_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
+              "frame-src https://*.withpersona.com https://challenges.cloudflare.com; connect-src 'self'; "
+              "frame-ancestors 'none'")
+
 sessions = {}   # token -> {"uid", "created", "stepped_up_at"}
+persona_flows = {}  # flow id -> {"uid", "session", "created"}
 flows = {}      # flow id -> {"challenge", "purpose", "name", "user_id", "created", "uid"}
 _state = threading.Lock()
 
@@ -130,6 +138,41 @@ def login_finish(body, purpose, session_uid=None):
     return uid
 
 
+# ---------- Persona (through the local sidecar, persona/server.js) ----------
+
+def _sidecar(path, body=None):
+    import urllib.request
+    secret = os.environ.get("GUARDIAN_SIDECAR_SECRET", "")
+    if len(secret) < 16:
+        raise core.AppError("Persona isn't set up on this computer yet.")
+    req = urllib.request.Request(PERSONA_URL + path, data=json.dumps(body or {}).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "X-Guardian-Secret": secret})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # localhost: never through a proxy
+    try:
+        with opener.open(req, timeout=30) as r:
+            return json.loads(r.read())
+    except Exception:
+        raise core.AppError("Couldn't reach the Persona check. Is the Persona sidecar running?")
+
+
+def persona_begin(uid):
+    out = _sidecar("/internal/session")
+    fid = secrets.token_urlsafe(16)
+    with _state:
+        persona_flows[fid] = {"uid": uid, "session": out["sessionId"], "created": time.time()}
+    return {"flow": fid, "accessToken": out["accessToken"]}
+
+
+def persona_finish(uid, fid):
+    with _state:
+        flow = persona_flows.pop(str(fid or ""), None)
+    if not flow or flow["uid"] != uid or time.time() - flow["created"] > 30 * 60:
+        raise core.AppError("That check expired. Please start again.")
+    result = _sidecar("/internal/result", {"sessionId": flow["session"]}).get("result")
+    core.set_claim(uid, result)
+    return result
+
+
 # ---------- HTTP ----------
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -145,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("%s %s\n" % (self.command, self.path.split("?")[0]))
 
     # -- helpers --
-    def _send(self, code, body, ctype="application/json", cookie=None):
+    def _send(self, code, body, ctype="application/json", cookie=None, csp=None):
         raw = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -153,7 +196,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy",
+        self.send_header("Content-Security-Policy", csp or
                          "default-src 'self'; img-src 'self' data:; style-src 'self'; frame-ancestors 'none'")
         if cookie is not None:
             secure = "; Secure" if ORIGIN.startswith("https://") else ""
@@ -203,6 +246,14 @@ class Handler(BaseHTTPRequestHandler):
             if not s:
                 return self._send(401, {"error": "Please sign in."})
             return self._send(200, core.feed(s["uid"]))
+        if path == "/verify":
+            with open(os.path.join(STATIC, "verify.html"), "rb") as f:
+                return self._send(200, f.read(), STATIC_TYPES[".html"], csp=VERIFY_CSP)
+        if path == "/persona-relay.js":
+            if not os.path.isfile(WIDGET):
+                return self._send(404, {"error": "Run npm install in persona/ first."})
+            with open(WIDGET, "rb") as f:
+                return self._send(200, f.read(), STATIC_TYPES[".js"])
         name = "index.html" if path in ("/", "/index.html") else path.lstrip("/")
         full = os.path.normpath(os.path.join(STATIC, name))
         if not full.startswith(STATIC + os.sep) or not os.path.isfile(full):
@@ -253,6 +304,10 @@ class Handler(BaseHTTPRequestHandler):
                            body.get("family_phone"), body.get("mode"), body.get("senior"))
                 core.run_for(uid)
                 return self._send(200, {"ok": True})
+            if path == "/api/persona/begin":
+                return self._send(200, persona_begin(uid))
+            if path == "/api/persona/finish":
+                return self._send(200, {"result": persona_finish(uid, body.get("flow"))})
             if path == "/api/family/yes":
                 core.family_said_yes(uid)
                 return self._send(200, {"ok": True})

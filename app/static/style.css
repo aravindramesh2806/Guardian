@@ -22,6 +22,7 @@ p { margin: 0 0 14px; }
 .muted { color: var(--muted); }
 .small { font-size: 0.85rem; }
 .card { background: var(--card); border: 2px solid var(--line); border-radius: 16px; padding: 18px; margin: 12px 0; }
+a.button { display: flex; align-items: center; justify-content: center; text-decoration: none; text-align: center; }
 button, .button { font: inherit; font-weight: 600; min-height: 56px; width: 100%; padding: 12px 18px; border-radius: 14px;
   border: 2px solid var(--brand); background: var(--brand); color: var(--brand-ink); cursor: pointer; margin: 6px 0; }
 button.secondary { background: transparent; color: var(--brand); }

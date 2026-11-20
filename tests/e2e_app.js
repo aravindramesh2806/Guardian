@@ -39,6 +39,13 @@ const dir = process.argv[2];
   let t = await text();
   console.log('3 home status:', /You're protected/.test(t) ? "You're protected" : 'MISSING', '| items:', (await p.$$('.card.item')).length,
     '| asks:', await p.locator('.card', { hasText: 'Needs you' }).count(), '| sample notice:', /sample data/.test(t));
+  console.log('   persona card:', await p.getByText('Verify with Persona').count() === 1);
+  await p.getByText('Verify with Persona').click();
+  await p.getByText(/isn.t set up on this computer|reach the Persona check/).waitFor();
+  console.log('   verify page (no sidecar):', (await p.textContent('#status')).trim());
+  await shot('verify');
+  await p.getByText('Back to Guardian').click();
+  await p.getByText('Hello, Rose').waitFor();
   const ask = p.locator('.card', { hasText: 'Dispute $389.00' });
   await ask.getByText('Yes, do it').click();
   await p.waitForTimeout(1500);

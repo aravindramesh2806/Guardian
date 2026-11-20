@@ -61,6 +61,10 @@ python3 -m venv .venv && .venv/bin/pip install -r app/requirements.txt
 - **Security:** approving, deleting and turning on "Act for me" need a fresh passkey check (5 minutes).
   Posts must come from the app's own origin; the session cookie is HttpOnly and SameSite=Strict. Each
   person's data lives in `users/<random id>/` and "Delete my data" removes that folder.
+- **Persona inside the app:** put `PERSONA_API_KEY` and a random `GUARDIAN_SIDECAR_SECRET` (16+ characters) in
+  `.env`, then run `cd persona && npm install && node server.js` beside the app. The home screen offers
+  "Verify with Persona" whenever card locks need it; each person's pass is kept in their own store for 24
+  hours. Persona's page blocks headless browsers, so do the check in a normal browser.
 - **Tests:** `.venv/bin/python -m unittest discover -s tests -t .` and the browser test `tests/e2e_app.js`.
 - **Not yet:** real Gmail, push notifications while the app is closed (needs HTTPS and VAPID keys), real
   SMS for family consent, and a phone install (needs HTTPS on a real domain).

@@ -140,7 +140,12 @@ class Server(unittest.TestCase):
             headers["Cookie"] = "gsid=" + cookie
         conn.request(method, path, json.dumps(body) if body is not None else None, headers)
         r = conn.getresponse()
-        return r.status, json.loads(r.read() or b"{}"), r
+        raw = r.read()
+        try:
+            data = json.loads(raw or b"{}")
+        except ValueError:
+            data = {"html": raw.decode(errors="replace")}
+        return r.status, data, r
 
     def session(self, stepped_up):
         uid = new_user()
@@ -189,11 +194,100 @@ class Server(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", r.getheader("Content-Security-Policy"))
         self.assertEqual(r.getheader("X-Content-Type-Options"), "nosniff")
 
+    def test_verify_page_may_frame_persona_and_nothing_else(self):
+        status, _, r = self.request("GET", "/verify")
+        self.assertEqual(status, 200)
+        csp = r.getheader("Content-Security-Policy")
+        self.assertIn("frame-src https://*.withpersona.com", csp)
+        self.assertIn("frame-ancestors 'none'", csp)
+
     def test_internal_errors_are_not_shown_to_the_page(self):
         _, token = self.session(True)
         status, body, _ = self.request("POST", "/api/real", {"threat": "no-such-threat"}, token)
         self.assertEqual(status, 400)
         self.assertEqual(body["error"], "That item is no longer on your list.")
+
+
+@unittest.skipIf(server is None, "webauthn not installed; run with .venv/bin/python")
+class PersonaInApp(unittest.TestCase):
+    """The app's Persona check, against a fake sidecar that enforces the shared secret like persona/server.js."""
+
+    SECRET = "s" * 32
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+
+        class Fake(http.server.BaseHTTPRequestHandler):
+            sessions = {}
+
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                ok = self.headers.get("X-Guardian-Secret") == PersonaInApp.SECRET
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+                if not ok:
+                    out, code = {"error": "forbidden"}, 403
+                elif self.path == "/internal/session":
+                    sid = "sess-%d" % len(Fake.sessions)
+                    Fake.sessions[sid] = True
+                    out, code = {"sessionId": sid, "accessToken": "tok-" + sid}, 200
+                elif self.path == "/internal/result" and Fake.sessions.pop(body.get("sessionId"), None):
+                    out, code = {"result": "passed"}, 200
+                else:
+                    out, code = {"error": "unknown or expired session"}, 404
+                raw = json.dumps(out).encode()
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+        cls.fake = http.server.HTTPServer(("127.0.0.1", 0), Fake)
+        threading.Thread(target=cls.fake.serve_forever, daemon=True).start()
+        server.PERSONA_URL = "http://127.0.0.1:%d" % cls.fake.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fake.shutdown()
+
+    def setUp(self):
+        os.environ["GUARDIAN_SIDECAR_SECRET"] = self.SECRET
+        self.addCleanup(os.environ.pop, "GUARDIAN_SIDECAR_SECRET", None)
+
+    def test_a_passed_check_lets_card_locks_run(self):
+        uid = new_user()
+        self.assertFalse(core.feed(uid)["verified"]["fresh"])
+        flow = server.persona_begin(uid)
+        self.assertTrue(flow["accessToken"].startswith("tok-"))
+        self.assertEqual(server.persona_finish(uid, flow["flow"]), "passed")
+        self.assertTrue(core.feed(uid)["verified"]["fresh"])
+        core.run_for(uid)
+        card = next(i for i in core.feed(uid)["items"] if "389.00" in i["summary"])
+        self.assertIn("Card locked", card["did"])
+
+    def test_someone_elses_check_cannot_be_used(self):
+        a, b = new_user("A"), new_user("B")
+        flow = server.persona_begin(a)
+        with self.assertRaises(core.AppError):
+            server.persona_finish(b, flow["flow"])
+        self.assertFalse(core.feed(b)["verified"]["fresh"])
+
+    def test_a_check_works_once(self):
+        uid = new_user()
+        flow = server.persona_begin(uid)
+        server.persona_finish(uid, flow["flow"])
+        with self.assertRaises(core.AppError):
+            server.persona_finish(uid, flow["flow"])
+
+    def test_wrong_or_missing_secret_is_refused(self):
+        os.environ["GUARDIAN_SIDECAR_SECRET"] = "x" * 32
+        with self.assertRaises(core.AppError):
+            server.persona_begin(new_user())
+        os.environ.pop("GUARDIAN_SIDECAR_SECRET")
+        with self.assertRaises(core.AppError) as e:
+            server.persona_begin(new_user())
+        self.assertIn("isn't set up", str(e.exception))
 
 
 def tearDownModule():

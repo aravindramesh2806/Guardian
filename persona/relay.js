@@ -74,7 +74,7 @@ function createVerifier({ persona, outFile, source = "Persona Relay sandbox", sa
         privacyPassToken: pass.privacyPassToken, relayToken: s.relayToken, relaySecret: s.relaySecret });
       if (claim.tokenConsumed === false) throw new Error("Persona did not consume the privacy pass token");
       const result = parseClaim(claim.claimPayload);
-      writeVerification(outFile, result, source, now());
+      if (outFile) writeVerification(outFile, result, source, now()); // the app stores results itself: no file
       return { result };
     },
     sessionCount: () => sessions.size,

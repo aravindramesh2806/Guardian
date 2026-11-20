@@ -35,6 +35,16 @@ const verifier = createVerifier({
 
 const widget = path.join(__dirname, "node_modules", "@persona", "relay", "dist", "relay.umd.js");
 
+// For the Guardian web app (app/server.py): the same flow, but the app keeps each person's result itself.
+// Only callers that know GUARDIAN_SIDECAR_SECRET (both read it from .env) may use these endpoints.
+const internal = createVerifier({ persona: new Persona({ apiKey: process.env.PERSONA_API_KEY }), outFile: null });
+const crypto = require("crypto");
+function internalAllowed(req) {
+  const want = process.env.GUARDIAN_SIDECAR_SECRET || "";
+  const got = String(req.headers["x-guardian-secret"] || "");
+  return want.length >= 16 && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+}
+
 function readBody(req, limit = 4096) {
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
@@ -49,6 +59,14 @@ http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/") return send(res, 200, "text/html; charset=utf-8", fs.readFileSync(path.join(__dirname, "verify.html")));
     if (req.method === "GET" && req.url === "/relay.js") return send(res, 200, "application/javascript", fs.readFileSync(widget));
+    if (req.method === "POST" && req.url.startsWith("/internal/")) {
+      if (!internalAllowed(req)) return json(res, 403, { error: "forbidden" });
+      if (req.url === "/internal/session") return json(res, 200, await internal.start());
+      if (req.url === "/internal/result") {
+        const { sessionId } = await readBody(req);
+        return json(res, 200, await internal.finish(String(sessionId || "")));
+      }
+    }
     if (req.method === "POST" && req.url === "/api/session") return json(res, 200, await verifier.start());
     if (req.method === "POST" && req.url === "/api/result") {
       const { sessionId } = await readBody(req);

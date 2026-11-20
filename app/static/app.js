@@ -268,12 +268,17 @@ function render() {
       catch (e) { err.replaceChildren(errorBox(e.message)); } });
   });
 
+  const v = f.verified || {};
+  const verify = v.fresh ? null : el("div", { class: "card" }, el("span", { class: "tag medium" }, "Quick check"),
+    el("h3", {}, v.result === "passed" ? "Your check that it's really you has expired" : "Let Guardian lock a card for you"),
+    el("p", { class: "muted" }, "Before Guardian may lock a card, Persona checks that a real person is behind it. Guardian only learns passed or failed, never your ID or face. It lasts 24 hours."),
+    el("a", { class: "button", href: "/verify" }, "Verify with Persona"));
   show(
     el("h1", {}, "Hello, " + f.name),
     statusBox(f), err,
     f.data_source === "sample" ? el("p", { class: "notice" }, "Showing sample data until you connect Gmail.") : null,
     checkNow,
-    needs.length ? el("h2", {}, "Needs you") : null, ...needs,
+    needs.length ? el("h2", {}, "Needs you") : null, ...needs, verify,
     el("h2", {}, open.length ? "What Guardian found" : "Nothing new"),
     ...open.map(itemCard),
     done.length ? el("details", {}, el("summary", {}, `You marked ${done.length} as real`), ...done.map(itemCard)) : null,
