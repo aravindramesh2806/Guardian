@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 for _k in ("SIE_BASE_URL", "SINGLESTORE_HOST", "AMPLITUDE_API_KEY"):
     os.environ.pop(_k, None)
 
-from agent import brief, detect, flags, respond
+from agent import brief, detect, flags, live, respond
 from agent import run as runner
 from agent import store as st
 
@@ -219,3 +219,52 @@ class FlagTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveCall(Base):
+    def rows(self, turns, senior=True):
+        profile = detect.load("profile.json", self.data)
+        call = {"id": "t", "kind": "call", "from": "+1-555-0123", "caller_id": "Unknown"}
+        return live.score_stream(call, turns, profile["phone_contacts"], senior=senior)
+
+    def test_warning_fires_once_and_before_the_gift_card_ask(self):
+        scenario = detect.load("live_call.json", self.data)
+        rows = live.score_stream(scenario["call"], scenario["turns"],
+                                 detect.load("profile.json", self.data)["phone_contacts"])
+        alerts = [r for r in rows if r["alert"]]
+        self.assertEqual(len(alerts), 1)
+        self.assertNotIn("gift card", alerts[0]["text"].lower())
+        self.assertIn("money", alerts[0]["headline"])
+        self.assertTrue(all(r["level"] == "scam" for r in rows[rows.index(alerts[0]):]))
+
+    def test_score_never_goes_down(self):
+        scenario = detect.load("live_call.json", self.data)
+        rows = self.rows(scenario["turns"])
+        self.assertEqual([r["score"] for r in rows], sorted(r["score"] for r in rows))
+
+    def test_what_the_person_says_back_is_not_evidence(self):
+        rows = self.rows([{"t": 1, "speaker": "rose", "text": "Gift cards? Bail? Don't tell mom? Grandma, it's me!"}])
+        self.assertEqual(rows[0]["score"], 0.0)
+        self.assertFalse(rows[0]["alert"])
+
+    def test_a_normal_call_never_warns(self):
+        rows = self.rows([{"t": 1, "speaker": "caller", "text": "Hi Rose, your prescription is ready."},
+                          {"t": 4, "speaker": "caller", "text": "Pick it up any time before six."}])
+        self.assertFalse(any(r["alert"] for r in rows))
+        self.assertEqual(rows[-1]["level"], "safe")
+
+    def test_senior_protection_lowers_the_bar(self):
+        turns = [{"t": 1, "speaker": "caller", "text": "I need bail money today."}]  # 0.3 ask + 0.1 pressure
+        self.assertEqual(self.rows(turns, senior=True)[0]["level"], "watch")
+        turns = [{"t": 1, "speaker": "caller", "text": "Grandma, it's me. I need bail money."}]  # 0.6
+        self.assertEqual(self.rows(turns, senior=False)[0]["level"], "scam")
+
+    def test_family_is_told_only_if_they_consented(self):
+        profile = detect.load("profile.json", self.data)
+        profile["trusted_contacts"][0]["consent"] = False
+        self.assertEqual(live.outcome({"from": "+1-555-0123"}, profile)["told"], [])
+
+    def test_page_cannot_be_broken_by_transcript_text(self):
+        call = {"from": "+1-555-0123", "caller_id": "Unknown"}
+        rows = self.rows([{"t": 1, "speaker": "caller", "text": "</script><b>x</b>"}])
+        self.assertEqual(live.page(call, rows, {"blocked": "n", "told": []}).count("</script>"), 1)

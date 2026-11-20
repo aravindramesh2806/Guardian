@@ -26,6 +26,7 @@ Python 3.9+ and the standard library only. No installs.
 npm install               # Statsig web SDK (only needed to refresh web/vendor/statsig.min.js)
 python3 agent/run.py      # detect, decide, act, record
 python3 agent/brief.py    # daily brief + web/report.html
+python3 agent/live.py     # replay a live scam call + web/live.html (Dynamic Island warning)
 python3 -m unittest discover -s tests -t .
 ```
 
@@ -53,7 +54,7 @@ family alerts, disputes). Replacing one with a real integration changes only its
 | Tool | Role | Status |
 |---|---|---|
 | Amplitude | Audit trail: every detect, guard and act step is an event, with the run's gate values | **Live and verified** with `AMPLITUDE_API_KEY` |
-| SingleStore | Threats and actions store (the "never repeat" check) | Live when `SINGLESTORE_*` is set; SQLite otherwise. Data API path not yet verified |
+| SingleStore | Threats and actions store (the "never repeat" check) | **Live and verified** when `SINGLESTORE_*` is set (Data API, two runs: 8 new threats, then 0); SQLite otherwise |
 | Superlinked SIE | Borderline phishing and call checks; alert drafting with a fact guard | Live when `SIE_*` is set; rules and templates otherwise. Endpoint shape not yet verified |
 | Persona Relay | `live_human_presence` check before Guardian may lock a card | Local stand-in in `data/verification.json`; live needs the Node sidecar (to do) |
 | Statsig (web) | Report page: session replay, auto-capture analytics, `guardian_report_viewed` and `guardian_threat_opened` events | **Live and verified** with `STATSIG_CLIENT_KEY` (initialize 200, events 202) |
