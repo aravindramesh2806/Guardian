@@ -14,6 +14,7 @@ import re
 import secrets
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta
@@ -21,6 +22,8 @@ from datetime import datetime, timedelta
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import gmail  # noqa: E402
+import vault  # noqa: E402
 from agent import respond  # noqa: E402
 from agent import run as runner  # noqa: E402
 from agent import store as st  # noqa: E402
@@ -101,12 +104,14 @@ def create_user(name, credential):
     uid = secrets.token_hex(16)
     with _lock(uid):
         shutil.copytree(SAMPLE, _dir(uid, "data"))
+        vault.create_key(_dir(uid))
         # A new person has not done a Persona check: card locks wait until they do.
         _write(_dir(uid, "data", "verification.json"),
                {"claim_type": "live_human_presence", "result": "not checked", "source": "none yet"})
         save(uid, {"id": uid, "name": _clean_name(name), "created": _now(), "setup_done": False,
                    "who": "me", "mode": "tell", "paused": False, "family": None, "data_source": "sample",
-                   "credentials": [credential], "test_alert_at": None, "last_run": None, "last_error": None})
+                   "credentials": [credential], "test_alert_at": None, "last_run": None, "last_error": None,
+                   "gmail": None, "shadow": False, "accounts": []})
         _index_add(credential["id"], uid)
         _apply_settings(uid)
     return uid
@@ -147,6 +152,12 @@ def delete_user(uid):
     """Remove everything Guardian holds for this person. Cannot be undone."""
     with _lock(uid):
         meta = load(uid)
+        if meta.get("gmail"):
+            try:
+                gmail.revoke(vault.read_json(_dir(uid), gmail.TOKENS, {}))
+            except vault.VaultError:
+                pass
+        vault.shred(_dir(uid))  # first: any copy left behind can no longer be read
         with _index_lock:
             index = _read(_index_path(), {})
             for c in meta["credentials"]:
@@ -172,8 +183,15 @@ def _apply_settings(uid):
     fam = meta.get("family")
     profile["trusted_contacts"] = ([{"name": fam["name"], "channel": "sms", "address": fam["phone"],
                                      "consent": fam["status"] == "agreed"}] if fam else [])
+    if meta.get("gmail"):
+        # Real data: the person's own address and the accounts they named; no sample calls, cards or charges.
+        profile["emails"] = [meta["gmail"]["email"]] if meta["gmail"].get("email") else []
+        profile["accounts"] = [{"name": d, "domain": d} for d in meta.get("accounts", [])]
+        for key in ("cards", "usual_merchants", "phone_contacts", "started_actions"):
+            profile[key] = []
     _write(_dir(uid, "data", "profile.json"), profile)
-    gates = dict(MODES[meta["mode"]], kill_switch=bool(meta["paused"]))
+    # Shadow mode (real Gmail, read-only): the kill switch stops every action; alerts still reach the person.
+    gates = dict(MODES[meta["mode"]], kill_switch=bool(meta["paused"] or meta.get("shadow")))
     _write(_dir(uid, "data", "gates.json"), gates)
 
 
@@ -239,6 +257,96 @@ def test_alert(uid):
                     "one thing to do. Nothing to do for this one."}
 
 
+# ---------- Gmail ----------
+
+def connect_gmail(uid, tokens):
+    """Save the (encrypted) tokens, switch this person from sample data to their Gmail, in shadow mode."""
+    email = gmail.profile_email(tokens)
+    with _lock(uid):
+        vault.write_json(_dir(uid), gmail.TOKENS, tokens)
+        vault.write_json(_dir(uid), gmail.CACHE, {})
+        for name in ("inbox.json", "calls.json", "transactions.json", "receipts.json", "breaches.json"):
+            _write(_dir(uid, "data", name), [])
+        meta = load(uid)
+        meta["gmail"] = {"email": email, "connected_at": _now(), "last_sync": None, "last_error": None}
+        meta["data_source"], meta["shadow"] = "gmail", True
+        save(uid, meta)
+        _apply_settings(uid)
+        # Start fresh: nothing from the sample data carries over into the real account.
+        st.reset(_store(uid))
+        shutil.rmtree(_dir(uid, "runs"), ignore_errors=True)
+        shutil.rmtree(_dir(uid, "outbox"), ignore_errors=True)
+    return email
+
+
+def disconnect_gmail(uid):
+    with _lock(uid):
+        meta = load(uid)
+        if meta.get("gmail"):
+            gmail.revoke(vault.read_json(_dir(uid), gmail.TOKENS, {}))
+        for name in (gmail.TOKENS, gmail.CACHE):
+            if os.path.exists(_dir(uid, name)):
+                os.remove(_dir(uid, name))
+        meta["gmail"], meta["shadow"] = None, False
+        meta["data_source"] = "none"
+        save(uid, meta)
+        _apply_settings(uid)
+
+
+def set_accounts(uid, domains):
+    """The bank and main accounts the person uses (website addresses): lookalikes of these are flagged."""
+    clean = []
+    for d in domains or []:
+        d = str(d).strip().lower()
+        d = re.sub(r"^https?://", "", d).split("/")[0].removeprefix("www.")
+        if d and not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", d):
+            raise AppError("\"%s\" doesn't look like a website address, e.g. mybank.com" % d)
+        if d and d not in clean:
+            clean.append(d)
+    if len(clean) > 30:
+        raise AppError("Please list up to 30 accounts.")
+    with _lock(uid):
+        meta = load(uid)
+        meta["accounts"] = clean
+        save(uid, meta)
+        _apply_settings(uid)
+    return clean
+
+
+def _sync_gmail(uid, meta):
+    tokens = vault.read_json(_dir(uid), gmail.TOKENS)
+    cache = vault.read_json(_dir(uid), gmail.CACHE, {})
+    try:
+        cache, changed, new = gmail.sync(tokens, cache)
+        meta["gmail"].update(last_sync=_now(), last_error=None)
+        if changed:
+            vault.write_json(_dir(uid), gmail.TOKENS, tokens)
+    except gmail.GmailError as e:
+        meta["gmail"]["last_error"] = "%s (%s)" % (e, _now())
+    vault.write_json(_dir(uid), gmail.CACHE, cache)
+    save(uid, meta)
+    return list(cache.values())
+
+
+def retention(uid, days=None, now=None):
+    """Delete what Guardian no longer needs: cached mail and run logs older than the retention period."""
+    days = days or gmail.RETENTION_DAYS
+    cutoff = (now or time.time()) - days * 86400
+    with _lock(uid):
+        if os.path.exists(_dir(uid, gmail.CACHE)):
+            when = datetime.fromtimestamp(now) if now else None
+            vault.write_json(_dir(uid), gmail.CACHE, gmail.prune(vault.read_json(_dir(uid), gmail.CACHE, {}), when))
+        runs = _dir(uid, "runs")
+        removed = 0
+        if os.path.isdir(runs):
+            for name in os.listdir(runs):
+                path = os.path.join(runs, name)
+                if os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+                    removed += 1
+        return removed
+
+
 # ---------- Persona ----------
 
 def set_claim(uid, result):
@@ -266,8 +374,18 @@ def run_for(uid):
     """One check for one person. Returns the run summary; records errors instead of raising."""
     with _lock(uid):
         meta = load(uid)
+        work = None
         try:
-            s = runner.run(data_dir=_dir(uid, "data"), run_dir=_dir(uid, "runs"), outbox_dir=_dir(uid, "outbox"),
+            data_dir = _dir(uid, "data")
+            if meta.get("gmail"):
+                inbox = _sync_gmail(uid, meta)
+                # Decrypted mail exists only in a private temporary folder for the length of this check.
+                work = tempfile.mkdtemp(prefix="guardian-run-")
+                os.chmod(work, 0o700)
+                data_dir = os.path.join(work, "data")
+                shutil.copytree(_dir(uid, "data"), data_dir)
+                _write(os.path.join(data_dir, "inbox.json"), inbox)
+            s = runner.run(data_dir=data_dir, run_dir=_dir(uid, "runs"), outbox_dir=_dir(uid, "outbox"),
                            store=_store(uid), now=_now(), user_id=uid)
             meta = load(uid)
             meta["last_run"], meta["last_error"] = _now(), None
@@ -278,6 +396,9 @@ def run_for(uid):
             meta["last_error"] = "%s at %s" % (type(e).__name__, _now())
             save(uid, meta)
             return None
+        finally:
+            if work:
+                shutil.rmtree(work, ignore_errors=True)
 
 
 def heartbeat_path():
@@ -298,6 +419,7 @@ def check_everyone():
         try:
             if load(uid).get("setup_done"):
                 run_for(uid)
+                retention(uid)
         except AppError:
             continue
     worker_beat()
@@ -341,20 +463,25 @@ def feed(uid):
                       and respond.is_done((rows.get(a.get("key")) or {}).get("status") or a["status"])})
         undone = [row for row in rows.values() if str(row["status"]).endswith("(simulated undo)")]
         steps = next((a.get("text") for a in r["actions"] if a["action"] == "alert" and a.get("text")), None)
-        waiting = sorted({FRIENDLY.get(a["action"], a["action"]) + ": " + a["reason"] for a in r["actions"]
-                          if a["status"] == "waiting for you" and not a.get("ask") and a.get("reason")})
+        held = [a for a in r["actions"] if a["status"] == "waiting for you" and not a.get("ask") and a.get("reason")]
+        stopped = [a for a in held if a["reason"].startswith("kill switch")]
+        # In shadow mode (and while paused) say what Guardian WOULD have done, not that it is "waiting".
+        would = sorted({FRIENDLY.get(a["action"], a["action"]) for a in stopped})
+        waiting = sorted({FRIENDLY.get(a["action"], a["action"]) + ": " + a["reason"] for a in held if a not in stopped})
         for a in r["actions"]:
             if a.get("ask") and a["status"] == "waiting for you":
                 needs_you.append({"key": a["key"], "ask": a["ask"], "threat": r["threat"],
                                   "stuck": bool(a.get("stuck"))})
         items.append({"threat": r["threat"], "kind": r["kind"], "severity": r["severity"], "summary": r["summary"],
-                      "did": did, "waiting": waiting, "steps": steps, "marked_real": bool(r.get("marked_real")) or bool(undone)})
+                      "did": did, "would": would, "waiting": waiting, "steps": steps, "marked_real": bool(r.get("marked_real")) or bool(undone)})
     return {
         "name": meta.get("protected_name") or meta["name"], "mode": meta["mode"], "paused": meta["paused"],
         "family": meta.get("family"), "data_source": meta["data_source"], "last_run": meta.get("last_run"),
         "last_error": meta.get("last_error"), "checking": worker_ok(),
         "test_alert_at": meta.get("test_alert_at"), "needs_you": needs_you, "items": items,
         "verified": verification(uid),
+        "shadow": bool(meta.get("shadow")), "gmail": meta.get("gmail"), "accounts": meta.get("accounts", []),
+        "gmail_available": gmail.configured(),
     }
 
 
