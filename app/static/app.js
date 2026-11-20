@@ -421,17 +421,80 @@ function itemCard(it, err) {
   if (!it.marked_real) it.waiting.forEach((w) => card.append(el("p", { class: "muted" }, "Waiting: " + w)));
   if (!it.did.length && !it.waiting.length && !(it.would || []).length && !it.marked_real) card.append(el("p", { class: "muted" }, "Nothing done by itself. Just letting you know."));
   if (it.steps) card.append(el("details", {}, el("summary", {}, "What to do"), el("pre", { class: "steps" }, it.steps)));
-  if (!it.marked_real) {
-    card.append(action(el("button", { class: "btn2" }, "This was real, not a scam"), err, async () => {
-      const r = await call("/api/real", { threat: it.threat });
-      feedCache = r.feed; render();
-      notify("Thanks, noted", r.undone.length ? "Guardian undid: " + r.undone.join(", ") : "Guardian won't act on it.");
-    }));
+  if (!it.marked_real && it.confirmed_scam) {
+    card.append(el("p", { class: "did" }, "You confirmed it's a scam."),
+      el("button", { class: "btn mt-s", onclick: () => solve(it.threat) }, "See how to deal with it"));
+  } else if (!it.marked_real) {
+    card.append(el("div", { class: "stack g10 mt-s" },
+      action(el("button", { class: "btn" }, "Yes, it's a scam"), err, async () => {
+        feedCache = await call("/api/scam", { threat: it.threat });
+        solve(it.threat);
+      }),
+      action(el("button", { class: "btn2" }, "This was real, not a scam"), err, async () => {
+        const r = await call("/api/real", { threat: it.threat });
+        feedCache = r.feed; render();
+        notify("Thanks, noted", r.undone.length ? "Guardian undid: " + r.undone.join(", ") : "Guardian won't act on it.");
+      })));
   }
   return card;
 }
 
+// Why a fix hasn't happened yet, in the person's words.
+function fixReason(x) {
+  const r = x.reason || "";
+  if (r.startsWith("kill switch")) return feedCache && feedCache.shadow
+    ? "Guardian is only watching for now, so it won't do this yet." : "Guardian is paused, so it won't do this now.";
+  if (x.needs_persona) return "Needs the quick Persona check first.";
+  if (r.startsWith("you approved it")) return "You said yes. " + r.replace(/^you approved it, but /, "Still waiting: ") + ".";
+  if (/is off$|wait for your confirmation/.test(r)) return "Waiting for your yes.";
+  if (/no lock option/.test(r)) return "Your card issuer doesn't let Guardian lock it. Call the number on the back of the card.";
+  return r ? r.charAt(0).toUpperCase() + r.slice(1) + "." : "";
+}
+
+// "Yes, it's a scam": what Guardian can do now (each with its own yes), and the person's own steps.
+let solving = null;
+function solve(threat) {
+  const it = (feedCache.items || []).find((i) => i.threat === threat);
+  if (!it) { solving = null; return render(); }
+  solving = threat;
+  const err = errorSlot();
+  const back = () => { solving = null; render(); };
+  const fixes = it.fixes.map((x) => {
+    const row = el("div", { class: "card stack g10" }, el("h3", {}, x.label));
+    if (x.done) row.append(el("p", { class: "did" }, "Done."));
+    else if (x.can) row.append(el("p", { class: "muted small" }, "You'll confirm with Face ID."),
+      action(el("button", { class: "btn" }, icon("face", 24), "Yes, do it"), err, async () => {
+        feedCache = await call("/api/approve", { key: x.key });
+        solve(threat);
+      }));
+    else {
+      row.append(el("p", { class: "muted" }, fixReason(x)));
+      if (x.needs_persona) row.append(el("a", { class: "button secondary", href: "/verify" }, "Do the Persona check"));
+    }
+    return row;
+  });
+  const how = it.how && it.how.length ? it.how : null;
+  const fam = feedCache.family;
+  show(
+    topBar(null, back),
+    el("h1", {}, "Let's deal with it"),
+    el("p", { class: "lead" }, it.summary),
+    it.did.length ? el("div", { class: "mt-s" }, note("soft", "check", "Already done: " + it.did.join(" · ") + ".")) : null,
+    el("h2", {}, "What Guardian can do now"),
+    fixes.length ? el("div", { class: "cards" }, ...fixes)
+      : el("div", { class: "card" }, el("p", {}, "There's nothing here for Guardian to block or lock. Your steps below are what matters.")),
+    err,
+    el("h2", {}, "What you should do"),
+    how ? el("ol", { class: "steps-list" }, ...how.map((s) => el("li", {}, s)))
+      : it.steps ? el("div", { class: "card" }, el("pre", { class: "steps" }, it.steps))
+      : el("div", { class: "card" }, el("p", {}, "Nothing more for you to do. Don't reply to it or click anything in it.")),
+    fam && fam.status === "agreed" && it.severity === "high"
+      ? el("div", { class: "mt-s" }, note("soft", "people", fam.name + " agreed to be told about serious scams like this one.")) : null,
+    el("div", { class: "foot" }, el("button", { class: "btn2", onclick: back }, "Back to my Guardian")));
+}
+
 function render() {
+  solving = null;
   const f = feedCache, err = errorSlot();
   const act = (button, fn) => action(button, err, async () => { feedCache = await fn(); render(); });
   const banner = notice ? (notice.ok ? note("soft", "check", notice.text) : errorBox(notice.text)) : null;
@@ -547,7 +610,10 @@ async function home() {
       const f = await call("/api/feed");
       const fresh = f.items.filter((i) => !seenThreats.has(i.threat) && !i.marked_real);
       fresh.forEach((i) => { seenThreats.add(i.threat); notify(i.severity === "high" ? "Guardian: scam stopped" : "Guardian: heads up", i.summary); });
-      if (JSON.stringify(f) !== JSON.stringify(feedCache)) { feedCache = f; if (!document.activeElement || document.activeElement === document.body) render(); }
+      if (JSON.stringify(f) !== JSON.stringify(feedCache)) {
+        feedCache = f;
+        if (!document.activeElement || document.activeElement === document.body) solving ? solve(solving) : render();
+      }
     } catch (e) { /* offline: try again next time */ }
   }, 30000);
 }

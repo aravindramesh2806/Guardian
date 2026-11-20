@@ -164,3 +164,8 @@ main > .card + h2 { margin-top: 24px; }
 main > .card p + p { margin-top: 10px; }
 main > h1 + p { margin-top: 12px; }
 main > button.secondary { margin-top: 12px; }
+.steps-list { margin: 0; padding: 0; list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 10px; }
+.steps-list li { counter-increment: step; display: flex; gap: 14px; align-items: flex-start; padding: 16px; border-radius: 16px;
+  background: var(--surface); border: 1px solid var(--line); font-size: 17px; }
+.steps-list li::before { content: counter(step); flex: none; width: 30px; height: 30px; border-radius: 15px; background: var(--accent-soft);
+  color: var(--accent); font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 15px; }

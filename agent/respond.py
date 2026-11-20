@@ -61,7 +61,11 @@ STEPS = {
         "Real family can wait while you check: call them on the number you already have.",
     ],
     "suspicious": ["Do not click links or call back until you have checked who it is."],
-    "phishing": [],
+    "phishing": [
+        "Do not click links or open attachments in that email.",
+        "If you already typed a password after clicking, change it now on the real site or app.",
+        "If it asks you to act, check by opening the company's app or typing its address yourself.",
+    ],
 }
 
 
@@ -165,8 +169,12 @@ def guard(action, gates, verification, profile, now=None, approved=()):
     if gates.get("kill_switch"):
         return False, "kill switch is on; nothing runs without you"
     if action["type"] == "quarantine":
+        if action["key"] in approved:
+            return True, "you confirmed it's a scam and asked for this"
         return (True, "auto-quarantine is on") if gates.get("auto_quarantine") else (False, "auto-quarantine is off")
     if action["type"] == "block_number":
+        if action["key"] in approved:
+            return True, "you confirmed it's a scam and asked for this"
         return (True, "auto-block is on") if gates.get("auto_block_numbers") else (False, "auto-block is off")
     if action["type"] == "notify_trusted":
         if not action["contact"].get("consent"):
@@ -180,7 +188,7 @@ def guard(action, gates, verification, profile, now=None, approved=()):
         ok, reason = persona_ok(verification, now)
         if not ok:
             return False, reason
-        if not gates.get("auto_lock_card"):
+        if not gates.get("auto_lock_card") and action["key"] not in approved:
             return False, "auto-lock is off"
         c = card(profile, action["card"])
         if not c or not c.get("issuer_lock_api"):
@@ -195,13 +203,23 @@ def guard(action, gates, verification, profile, now=None, approved=()):
     return False, "unknown action"
 
 
+def _fill(ev, profile):
+    c = card(profile, ev.get("card", "")) or {}
+    return {"domains": ", ".join(ev.get("domains", [])), "account": ev.get("account", ""),
+            "last4": c.get("last4", ""), "merchant": ev.get("merchant", ""), "amount": ev.get("amount", 0)}
+
+
+def steps_for(kind, ev, profile):
+    """The person's own steps for one threat, in plain words."""
+    fill = _fill(ev, profile)
+    return [s.format(**fill) for s in STEPS.get(kind, [])]
+
+
 def alert_text(threat, profile):
     """Plain-language alert with exact steps. Returns (text, drafted_by)."""
     ev = threat["evidence"]
-    c = card(profile, ev.get("card", "")) or {}
-    fill = {"domains": ", ".join(ev.get("domains", [])), "account": ev.get("account", ""),
-            "last4": c.get("last4", ""), "merchant": ev.get("merchant", ""), "amount": ev.get("amount", 0)}
-    steps = [s.format(**fill) for s in STEPS.get(threat["kind"], [])]
+    fill = _fill(ev, profile)
+    steps = steps_for(threat["kind"], ev, profile)
     fallback = threat["summary"] + "." + "".join("\n  %d. %s" % (i + 1, s) for i, s in enumerate(steps))
     facts = {"what_happened": threat["summary"], "evidence": ev, "steps": steps}
     must = {"identity_breach": [fill["domains"]], "takeover": [fill["account"]],

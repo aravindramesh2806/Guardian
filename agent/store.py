@@ -141,6 +141,16 @@ def marked_real(store):
     return {r["threat_key"] for r in store.rows("SELECT threat_key FROM feedback WHERE label = %s", ("real",))}
 
 
+def mark_scam(store, threat_key, at):
+    """The person confirmed it is a scam. Kept as feedback; it never makes Guardian act by itself."""
+    store.exec("DELETE FROM feedback WHERE threat_key = %s", (threat_key,))
+    store.exec("INSERT INTO feedback (threat_key, label, at) VALUES (%s, %s, %s)", (threat_key, "scam", at))
+
+
+def marked_scam(store):
+    return {r["threat_key"] for r in store.rows("SELECT threat_key FROM feedback WHERE label = %s", ("scam",))}
+
+
 def actions_for(store, threat_key):
     return store.rows("SELECT action_key, action, status, detail FROM actions WHERE threat_key = %s", (threat_key,))
 
