@@ -32,8 +32,18 @@ except ImportError:  # webauthn not installed in this interpreter
 CRED = {"id": "cred-1", "public_key": "x", "sign_count": 0}
 
 
+def unique_email(name="person"):
+    return "%s-%d@example.com" % (name.lower(), time.time_ns())
+
+
+def confirmed_user(name="Jo", email=None):
+    uid = core.create_user(name, dict(CRED, id="cred-%d" % time.time_ns()), email or unique_email(name))
+    core.verify_code(uid, core.issue_code(uid))
+    return uid
+
+
 def new_user(name="Rose", mode="act", family=True):
-    uid = core.create_user(name, dict(CRED, id="cred-%f" % time.time()))
+    uid = confirmed_user(name)
     core.setup(uid, "me", None, "Sam (daughter)" if family else None, "+1 555 0142" if family else None, mode, True)
     core.run_for(uid)
     return uid
@@ -81,7 +91,7 @@ class Core(unittest.TestCase):
         self.assertEqual(again["did"], [])
 
     def test_pause_stops_actions(self):
-        uid = core.create_user("Jo", dict(CRED, id="cred-pause"))
+        uid = confirmed_user("Jo")
         core.setup(uid, "me", None, None, None, "act", True)
         core.set_paused(uid, True)
         core.run_for(uid)
@@ -89,7 +99,7 @@ class Core(unittest.TestCase):
         self.assertTrue(core.feed(uid)["paused"])
 
     def test_bad_input_is_refused_plainly(self):
-        uid = core.create_user("Jo", dict(CRED, id="cred-bad"))
+        uid = confirmed_user("Jo")
         with self.assertRaises(core.AppError):
             core.setup(uid, "me", None, "Sam", "call me", "act", False)
         with self.assertRaises(core.AppError):
@@ -497,6 +507,173 @@ class GmailInApp(unittest.TestCase):
         self.assertIn("/?gmail=connected", get("/oauth/google/callback?state=st-1&code=good-code"))
         self.assertEqual(core.feed(uid)["data_source"], "gmail")
         self.assertIn("gmail_error", get("/oauth/google/callback?state=st-1&code=good-code"))  # used once
+
+
+class EmailCheck(unittest.TestCase):
+    def fresh(self, email=None):
+        return core.create_user("Kim", dict(CRED, id="cred-%d" % time.time_ns()), email or unique_email("kim"))
+
+    def test_code_is_emailed_and_stored_only_as_a_hash(self):
+        uid = self.fresh()
+        code = core.issue_code(uid)
+        self.assertRegex(code, r"^\d{6}$")
+        self.assertNotIn(code, json.dumps(core.load(uid)))
+        with open(os.path.join(USERS_TMP, "dev_mail.log")) as f:
+            self.assertIn(code, f.read())  # development: "sent" to the local log
+        self.assertTrue(core.verify_code(uid, code))
+        self.assertTrue(core.load(uid)["email_verified"])
+
+    def test_wrong_codes_lock_after_five_tries(self):
+        uid = self.fresh()
+        code = core.issue_code(uid)
+        wrong = "%06d" % ((int(code) + 1) % 10 ** 6)
+        for _ in range(5):
+            with self.assertRaises(core.AppError):
+                core.verify_code(uid, wrong)
+        with self.assertRaises(core.AppError) as e:
+            core.verify_code(uid, code)  # even the right one, until a new code is sent
+        self.assertIn("Too many", str(e.exception))
+
+    def test_codes_expire_and_resends_are_limited(self):
+        uid = self.fresh()
+        t = time.time()
+        code = core.issue_code(uid, now=t)
+        with self.assertRaises(core.AppError):
+            core.issue_code(uid, now=t + 10)  # under a minute
+        with self.assertRaises(core.AppError) as e:
+            core.verify_code(uid, code, now=t + 16 * 60)
+        self.assertIn("expired", str(e.exception))
+        for i in range(1, 5):
+            core.issue_code(uid, now=t + i * 61)
+        with self.assertRaises(core.AppError):
+            core.issue_code(uid, now=t + 6 * 61)  # sixth in an hour
+
+    def test_unconfirmed_accounts_are_deleted_after_24_hours(self):
+        old, fresh, done = self.fresh(), self.fresh(), confirmed_user("Lee")
+        meta = core.load(old)
+        meta["created"] = "2020-01-01T00:00:00"
+        core.save(old, meta)
+        self.assertGreaterEqual(core.purge_unverified(), 1)
+        self.assertFalse(os.path.exists(os.path.join(USERS_TMP, old)))
+        self.assertTrue(os.path.exists(os.path.join(USERS_TMP, fresh)))
+        self.assertTrue(os.path.exists(os.path.join(USERS_TMP, done)))
+
+    def test_one_confirmed_account_per_email(self):
+        email = unique_email("dup")
+        confirmed_user("First", email)
+        self.assertTrue(core.email_in_use(email))
+        second = self.fresh(email)
+        with self.assertRaises(core.AppError):
+            core.verify_code(second, core.issue_code(second))
+
+    def test_bad_email_is_refused(self):
+        for bad in ("", "nope", "a@b", "x" * 300 + "@example.com"):
+            with self.assertRaises(core.AppError):
+                core.clean_email(bad)
+
+
+@unittest.skipIf(server is None, "webauthn not installed; run with .venv/bin/python")
+class EmailGate(unittest.TestCase):
+    def test_nothing_works_until_the_email_is_confirmed(self):
+        httpd, _ = server.serve(port=0, worker=False)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        port, origin = httpd.server_address[1], server.ORIGIN
+
+        def call(method, path, body=None, token=None):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+            headers = {"Origin": origin, "Content-Type": "application/json", "Cookie": "gsid=%s" % token}
+            conn.request(method, path, json.dumps(body) if body is not None else None, headers)
+            r = conn.getresponse()
+            return r.status, json.loads(r.read() or b"{}")
+        uid = core.create_user("Kim", dict(CRED, id="cred-gate"), unique_email("gate"))
+        code = core.issue_code(uid)
+        token = server._new_session(uid)
+        self.assertEqual(call("GET", "/api/feed", token=token)[1].get("verify_email"), True)
+        status, body = call("POST", "/api/setup", {"who": "me", "mode": "tell"}, token)
+        self.assertEqual((status, body.get("verify_email")), (403, True))
+        self.assertEqual(call("POST", "/api/email/verify", {"code": code}, token)[0], 200)
+        self.assertEqual(call("POST", "/api/setup", {"who": "me", "mode": "tell"}, token)[0], 200)
+        self.assertEqual(call("GET", "/api/feed", token=token)[0], 200)
+
+    def test_signups_are_limited_per_address(self):
+        server.signup_times.clear()
+        for _ in range(server.SIGNUPS_PER_HOUR):
+            server.register_begin({"name": "A", "email": unique_email("a")}, "203.0.113.9")
+        with self.assertRaises(core.AppError):
+            server.register_begin({"name": "A", "email": unique_email("a")}, "203.0.113.9")
+        server.register_begin({"name": "B", "email": unique_email("b")}, "203.0.113.10")  # others unaffected
+
+    def test_a_taken_email_cannot_sign_up_again(self):
+        email = unique_email("taken")
+        confirmed_user("T", email)
+        with self.assertRaises(core.AppError):
+            server.register_begin({"name": "T2", "email": email}, "203.0.113.11")
+
+
+try:
+    import push  # noqa: E402
+except ImportError:
+    push = None
+
+
+@unittest.skipIf(push is None, "pywebpush not installed; run with .venv/bin/python")
+class Push(unittest.TestCase):
+    def test_a_push_is_encrypted_end_to_end_and_carries_no_message_text(self):
+        """A real Web Push to a fake push service, decrypted with the device's key as a phone would."""
+        import base64 as b64
+        import http.server
+        import http_ece
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        device_key = ec.generate_private_key(ec.SECP256R1())
+        auth = os.urandom(16)
+        received = {}
+
+        class PushService(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                received["headers"] = {k.lower(): v for k, v in self.headers.items()}
+                received["body"] = self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(201)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+        svc = http.server.HTTPServer(("127.0.0.1", 0), PushService)
+        threading.Thread(target=svc.serve_forever, daemon=True).start()
+        self.addCleanup(svc.shutdown)
+        b64u = lambda raw: b64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+        pub = device_key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+        sub = {"endpoint": "http://127.0.0.1:%d/push/abc" % svc.server_address[1], "keys": {"p256dh": b64u(pub), "auth": b64u(auth)}}
+        self.assertEqual(push.send(sub, "Guardian", "Guardian found 2 new things. Tap to see."), "ok")
+        self.assertEqual(received["headers"].get("content-encoding"), "aes128gcm")
+        self.assertIn("vapid", received["headers"].get("authorization", "").lower())
+        self.assertNotIn(b"Guardian found", received["body"])  # the push service sees only ciphertext
+        plain = http_ece.decrypt(received["body"], private_key=device_key, auth_secret=auth, version="aes128gcm")
+        self.assertEqual(json.loads(plain), {"title": "Guardian", "body": "Guardian found 2 new things. Tap to see."})
+        self.assertEqual(len(push.public_key()), 87)  # 65-byte P-256 point, base64url
+
+    def test_new_findings_push_a_count_never_content_and_dead_devices_are_dropped(self):
+        uid = confirmed_user("Push")
+        core.add_push(uid, {"endpoint": "https://push.example/dev1", "keys": {"p256dh": "k1", "auth": "a1"}})
+        core.add_push(uid, {"endpoint": "https://push.example/dev2", "keys": {"p256dh": "k2", "auth": "a2"}})
+        sent = []
+        original = push.send
+        push.send = lambda sub, title, body: (sent.append((sub["endpoint"], body)) or
+                                              ("gone" if sub["endpoint"].endswith("dev2") else "ok"))
+        self.addCleanup(setattr, push, "send", original)
+        core.setup(uid, "me", None, None, None, "act", True)
+        core.run_for(uid)
+        self.assertEqual(sent[0][1], "Guardian found 8 new things. Tap to see.")
+        self.assertEqual([s["endpoint"] for s in core.load(uid)["push"]], ["https://push.example/dev1"])
+
+    def test_bad_subscriptions_are_refused(self):
+        uid = confirmed_user("Sub")
+        for bad in (None, {"endpoint": "http://insecure.example/x", "keys": {"p256dh": "k", "auth": "a"}},
+                    {"endpoint": "https://push.example/x", "keys": {}}):
+            with self.assertRaises(core.AppError):
+                core.add_push(uid, bad)
 
 
 def tearDownModule():

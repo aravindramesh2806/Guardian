@@ -89,14 +89,34 @@ def _new_session(uid, stepped_up=True):
 
 # ---------- passkey ceremonies ----------
 
-def register_begin(body):
+signup_times = {}  # client address -> recent sign-up starts (simple abuse limit)
+SIGNUPS_PER_HOUR = int(os.environ.get("GUARDIAN_SIGNUPS_PER_HOUR", "10"))
+
+
+def _signup_allowed(ip):
+    now = time.time()
+    with _state:
+        recent = [t for t in signup_times.get(ip, []) if now - t < 3600]
+        if len(recent) >= SIGNUPS_PER_HOUR:
+            signup_times[ip] = recent
+            return False
+        signup_times[ip] = recent + [now]
+        return True
+
+
+def register_begin(body, ip="?"):
     name = core._clean_name(body.get("name"))
+    email = core.clean_email(body.get("email"))
+    if core.email_in_use(email):
+        raise core.AppError("That email already has a Guardian account. Sign in instead.")
+    if not _signup_allowed(ip):
+        raise core.AppError("Too many sign-ups from here. Please try again later.")
     user_id = secrets.token_bytes(16)
     opts = generate_registration_options(
         rp_id=RP_ID, rp_name="Guardian", user_name=name, user_id=user_id, user_display_name=name,
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.REQUIRED, user_verification=UserVerificationRequirement.REQUIRED))
-    fid = _new_flow(challenge=opts.challenge, purpose="register", name=name)
+    fid = _new_flow(challenge=opts.challenge, purpose="register", name=name, email=email)
     return {"flow": fid, "options": json.loads(options_to_json(opts))}
 
 
@@ -108,7 +128,8 @@ def register_finish(body):
     except Exception:
         raise core.AppError("That passkey could not be checked. Please try again.")
     cred = {"id": b64u(v.credential_id), "public_key": b64u(v.credential_public_key), "sign_count": v.sign_count}
-    uid = core.create_user(flow["name"], cred)
+    uid = core.create_user(flow["name"], cred, flow["email"])
+    core.issue_code(uid)
     return uid
 
 
@@ -236,6 +257,14 @@ class Handler(BaseHTTPRequestHandler):
                     return v, s
         return None, None
 
+    def _client_ip(self):
+        # Behind a tunnel every request comes from 127.0.0.1: trust the tunnel's header only when told to.
+        if os.environ.get("GUARDIAN_TRUST_PROXY") == "1":
+            fwd = self.headers.get("CF-Connecting-IP") or (self.headers.get("X-Forwarded-For") or "").split(",")[0]
+            if fwd.strip():
+                return fwd.strip()
+        return self.client_address[0]
+
     def _body(self):
         if self.headers.get("Origin") != ORIGIN:
             raise PermissionError("bad origin")
@@ -258,12 +287,21 @@ class Handler(BaseHTTPRequestHandler):
             except core.AppError:
                 return self._send(200, {"signed_in": False}, cookie="")
             return self._send(200, {"signed_in": True, "name": meta["name"], "setup_done": meta["setup_done"],
+                                    "email": meta.get("email"), "email_verified": bool(meta.get("email_verified")),
                                     "stepped_up": time.time() - s["stepped_up_at"] < STEP_UP_SECONDS})
         if path == "/api/feed":
             _, s = self._session()
             if not s:
                 return self._send(401, {"error": "Please sign in."})
+            if not core.load(s["uid"]).get("email_verified"):
+                return self._send(403, {"error": "Please confirm your email first.", "verify_email": True})
             return self._send(200, core.feed(s["uid"]))
+        if path == "/api/push/key":
+            try:
+                import push
+                return self._send(200, {"key": push.public_key()})
+            except ImportError:
+                return self._send(400, {"error": "Alerts aren't set up on this server."})
         if path == "/oauth/google/start":
             _, s = self._session()
             if not s:
@@ -320,7 +358,7 @@ class Handler(BaseHTTPRequestHandler):
         token, s = self._session()
         try:
             if path == "/api/register/begin":
-                return self._send(200, register_begin(body))
+                return self._send(200, register_begin(body, self._client_ip()))
             if path == "/api/register/finish":
                 uid = register_finish(body)
                 return self._send(200, {"ok": True}, cookie=_new_session(uid))
@@ -343,6 +381,14 @@ class Handler(BaseHTTPRequestHandler):
                 with _state:
                     s["stepped_up_at"] = time.time()
                 return self._send(200, {"ok": True})
+            if path == "/api/email/verify":
+                core.verify_code(uid, body.get("code"))
+                return self._send(200, {"ok": True})
+            if path == "/api/email/resend":
+                core.issue_code(uid)
+                return self._send(200, {"ok": True})
+            if not core.load(uid).get("email_verified") and path != "/api/delete":
+                return self._send(403, {"error": "Please confirm your email first.", "verify_email": True})
             stepped_up = time.time() - s["stepped_up_at"] < STEP_UP_SECONDS
             needs_step_up = path in ("/api/approve", "/api/delete", "/api/gmail/disconnect") or (
                 path in ("/api/mode", "/api/setup") and body.get("mode") == "act" and core.load(uid)["mode"] != "act")
@@ -357,6 +403,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, persona_begin(uid))
             if path == "/api/persona/finish":
                 return self._send(200, {"result": persona_finish(uid, body.get("flow"))})
+            if path == "/api/push/subscribe":
+                core.add_push(uid, body.get("subscription"))
+                sent = core.notify(uid, "Guardian", "Alerts are on for this device.")
+                return self._send(200, {"ok": True, "test_sent": sent})
             if path == "/api/accounts":
                 core.set_accounts(uid, body.get("accounts") or [])
                 return self._send(200, core.feed(uid))

@@ -1,8 +1,9 @@
 // Browser test of the whole app with a virtual passkey (Chromium WebAuthn emulation).
-// Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots>
+// Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots> <users folder>
 // e.g. GUARDIAN_USERS_DIR=/tmp/g-e2e .venv/bin/python app/server.py &  then  node tests/e2e_app.js /tmp
 const { chromium } = require('playwright');
-const dir = process.argv[2];
+const dir = process.argv[2], usersDir = process.argv[3];
+const fs = require('fs');
 (async () => {
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 390, height: 844 } });
@@ -18,9 +19,19 @@ const dir = process.argv[2];
   await shot('welcome');
   await p.getByText('Get started').click();
   await p.fill('#name', 'Rose');
+  await p.fill('#email', 'rose.e2e@example.com');
   await p.getByText('Create my account with Face ID or fingerprint').click();
+  await p.getByText('Check your email').waitFor();
+  await shot('verify-email');
+  const mail = fs.readFileSync(usersDir + '/dev_mail.log', 'utf8');
+  const code = mail.match(/Your Guardian code is (\d{6})/g).pop().slice(-6);
+  await p.fill('#code', '000000' === code ? '111111' : '000000');
+  await p.getByText('Confirm', { exact: true }).click();
+  await p.getByText(/isn't right/).waitFor();
+  await p.fill('#code', code);
+  await p.getByText('Confirm', { exact: true }).click();
   await p.getByText('Step 1 of 5').waitFor();
-  console.log('1 registered with a passkey -> setup step 1');
+  console.log('1 registered with a passkey, wrong code refused, emailed code accepted -> setup step 1');
   await p.getByText('Continue', { exact: true }).click();
   await p.getByText('Continue with sample data for now').click();
   await p.fill('#fname', 'Sam (daughter)'); await p.fill('#fphone', '+1 555 0142');
@@ -56,6 +67,7 @@ const dir = process.argv[2];
   await phish.getByText('This was real, not a scam').click();
   await p.getByText(/You marked 1 as real/).waitFor();
   console.log('5 "This was real" -> moved under "You marked 1 as real"');
+  console.log('   alerts button:', await p.getByText('Turn on alerts on this device').count() === 1);
   await p.getByText('Simulate their YES (no SMS account yet)').click();
   await p.getByText('Agreed to be told about serious scams.').waitFor();
   await p.getByText("Pause Guardian's actions").click();

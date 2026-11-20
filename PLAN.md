@@ -249,7 +249,10 @@ Nothing in this table blocks the dummy tests. Those can start now on fictional d
 - Done since: 3 (Gmail connector: read-only sign-in with PKCE, sync, token refresh, revoke, shadow mode;
   tested against a fake Google, waiting for the real Google project), 7 (per-person encryption sealed by a
   master key, 30-day retention of mail and logs, crypto-shredding on delete, privacy page).
-- Open: 8 (SPF, DKIM and DMARC: needs real email headers), push while the app is closed (HTTPS), real SMS.
+- Done since: open sign-up with email confirmation (hashed 6-digit code, limits, unconfirmed accounts deleted
+  after 24 hours, one account per email, per-address sign-up limit); Web Push while the app is closed
+  (encrypted end to end, a count only, never content), verified by decrypting a real push in a test.
+- Open: 8 (SPF, DKIM and DMARC: needs real email headers), real SMS; a public HTTPS address (tunnel).
 
 ## 8. Order of work
 

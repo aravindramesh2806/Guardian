@@ -70,6 +70,34 @@ python3 -m venv .venv && .venv/bin/pip install -r app/requirements.txt
   "What Guardian reads and keeps" page (`/privacy`) says this in plain words.
 - **Tests:** `.venv/bin/python -m unittest discover -s tests -t .` and the browser test `tests/e2e_app.js`.
 
+- **Sign-up:** anyone with the address can sign up, with a name, an email and a passkey. Guardian emails a
+  6-digit code (stored only as a hash; 15 minutes; 5 tries; at most one a minute and five an hour); nothing
+  works until it is entered, and accounts not confirmed within 24 hours are deleted by the worker. One
+  confirmed account per email. Sign-ups are limited per address (`GUARDIAN_SIGNUPS_PER_HOUR`, default 10;
+  set `GUARDIAN_TRUST_PROXY=1` behind a tunnel so the limit sees real addresses).
+- **Alerts while the app is closed (Web Push):** Settings > "Turn on alerts on this device". A push only says
+  "Guardian found 2 new things", never message text, and is encrypted end to end for that device. On iPhone,
+  add Guardian to the Home Screen first (Safari > Share > Add to Home Screen, iOS 16.4+).
+
+### On your phone: a public HTTPS address with a tunnel
+
+Passkeys and push need HTTPS and a **permanent** address (passkeys are tied to it). Either:
+
+- **ngrok** (free static domain): sign up, claim a domain under Domains, then
+  `ngrok config add-authtoken <token>` and `ngrok http --url=<your-domain>.ngrok-free.app 8800`.
+- **Cloudflare Tunnel** (your own domain): `cloudflared tunnel login`, `cloudflared tunnel create guardian`,
+  `cloudflared tunnel route dns guardian guardian.<yourdomain>`, `cloudflared tunnel run --url http://localhost:8800 guardian`.
+
+Then start the app with the address:
+
+```bash
+GUARDIAN_ORIGIN=https://<address> GUARDIAN_RP_ID=<address> GUARDIAN_TRUST_PROXY=1 .venv/bin/python app/server.py
+```
+
+Create a new account on the new address (passkeys made on localhost don't carry over), add
+`https://<address>/oauth/google/callback` to the Google OAuth client's redirect URIs, and set up SMTP so
+codes reach people's inboxes.
+
 ### Connecting Gmail (Google Cloud, about 15 minutes)
 
 1. <https://console.cloud.google.com/> > create a project (e.g. "Guardian").

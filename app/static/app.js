@@ -52,6 +52,7 @@ async function call(path, body) {
     body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (res.status === 403 && data.step_up) { await stepUp(); return call(path, body); }
+  if (res.status === 403 && data.verify_email) { verifyEmail(); throw new Error(data.error); }
   if (!res.ok) throw new Error(data.error || "Something went wrong. Please try again.");
   return data;
 }
@@ -65,8 +66,8 @@ async function passkeyGet(begin, finish) {
 }
 const stepUp = () => passkeyGet("/api/stepup/begin", "/api/stepup/finish");
 
-async function register(name) {
-  const { flow, options } = await call("/api/register/begin", { name });
+async function register(name, email) {
+  const { flow, options } = await call("/api/register/begin", { name, email });
   options.challenge = unb64u(options.challenge);
   options.user.id = unb64u(options.user.id);
   (options.excludeCredentials || []).forEach((c) => (c.id = unb64u(c.id)));
@@ -88,6 +89,7 @@ async function start() {
   let me;
   try { me = await call("/api/me"); } catch (e) { return show(errorBox(e.message)); }
   if (!me.signed_in) return welcome();
+  if (!me.email_verified) return verifyEmail(me.email);
   if (!me.setup_done) return setupWizard();
   return home();
 }
@@ -110,17 +112,57 @@ function welcome() {
 
 function createAccount() {
   const name = el("input", { type: "text", id: "name", autocomplete: "given-name", maxlength: "60" });
+  const email = el("input", { type: "email", id: "email", autocomplete: "email", maxlength: "254", inputmode: "email" });
   const err = el("div");
   const go = el("button", { type: "submit" }, "Create my account with Face ID or fingerprint");
   const form = el("form", { onsubmit: (e) => { e.preventDefault(); busy(go, async () => {
-    try { await register(name.value); setupWizard(); }
+    try { await register(name.value, email.value); verifyEmail(email.value); }
     catch (ex) { err.replaceChildren(errorBox(ex.name === "NotAllowedError" ? "That was cancelled. Try again when you're ready." : ex.message)); }
   }); } },
-    el("label", { for: "name" }, "What should we call you?"), name, go, err);
+    el("label", { for: "name" }, "What should we call you?"), name,
+    el("label", { for: "email" }, "Your email"), el("p", { class: "muted small" }, "We'll send a code to check it's yours."), email,
+    go, err);
   show(el("h1", {}, "Create your account"),
     el("p", {}, "Guardian uses a passkey instead of a password: your face or fingerprint on this device. Nothing to remember, nothing for a scammer to steal."),
     form, el("button", { class: "secondary", onclick: welcome }, "Back"));
   name.focus();
+}
+
+function verifyEmail(address) {
+  const code = el("input", { type: "text", id: "code", inputmode: "numeric", autocomplete: "one-time-code",
+    maxlength: "6", pattern: "[0-9]*" });
+  const err = el("div"), info = el("div");
+  const go = el("button", { type: "submit" }, "Confirm");
+  const form = el("form", { onsubmit: (e) => { e.preventDefault(); busy(go, async () => {
+    try { await call("/api/email/verify", { code: code.value }); start(); }
+    catch (ex) { err.replaceChildren(errorBox(ex.message)); }
+  }); } }, el("label", { for: "code" }, "6-digit code"), code, go, err);
+  const resend = el("button", { class: "secondary" }, "Send me a new code");
+  resend.addEventListener("click", () => busy(resend, async () => {
+    try { await call("/api/email/resend", {}); info.replaceChildren(el("p", { class: "muted" }, "A new code is on its way.")); err.replaceChildren(); }
+    catch (ex) { err.replaceChildren(errorBox(ex.message)); }
+  }));
+  show(el("h1", {}, "Check your email"),
+    el("p", {}, "We sent a 6-digit code to " + (address || "your email") + ". Enter it below to finish signing up."),
+    el("p", { class: "muted small" }, "Can't find it? Check your spam folder. Accounts that aren't confirmed are deleted after 24 hours."),
+    form, info, resend,
+    el("button", { class: "secondary", onclick: async () => { await call("/api/logout", {}); welcome(); } }, "Use a different email"));
+  code.focus();
+}
+
+async function turnOnAlerts(out) {
+  const say = (t, bad) => out.replaceChildren(bad ? errorBox(t) : el("p", { class: "muted" }, t));
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    return say(/iPhone|iPad/.test(navigator.userAgent)
+      ? "On iPhone, first add Guardian to your Home Screen (Share, then Add to Home Screen), then open it from there and try again."
+      : "This browser can't receive alerts while Guardian is closed.", true);
+  }
+  if (await Notification.requestPermission() !== "granted") return say("Alerts are blocked. You can allow them in your browser or phone settings.", true);
+  const reg = await navigator.serviceWorker.ready;
+  const { key } = await call("/api/push/key");
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(key) });
+  const r = await call("/api/push/subscribe", { subscription: sub.toJSON() });
+  say(r.test_sent ? "Alerts are on. We just sent a test to this device." : "Alerts are on for this device.");
 }
 
 function choice(name, value, title, text, checked) {
@@ -270,6 +312,11 @@ function render() {
   act(doIt, () => call("/api/mode", { mode: "act" }));
   const pause = el("button", { class: "secondary" }, f.paused ? "Resume Guardian's actions" : "Pause Guardian's actions");
   act(pause, () => call("/api/pause", { paused: !f.paused }));
+  const alertsOut = el("div");
+  const alertsBtn = el("button", { class: "secondary" }, "Turn on alerts on this device");
+  alertsBtn.addEventListener("click", () => busy(alertsBtn, async () => {
+    try { await turnOnAlerts(alertsOut); } catch (e) { alertsOut.replaceChildren(errorBox(e.message || "Couldn't turn on alerts.")); }
+  }));
   const signOut = el("button", { class: "secondary" }, "Sign out");
   signOut.addEventListener("click", async () => { await call("/api/logout", {}); clearInterval(pollTimer); welcome(); });
   const del = el("button", { class: "danger" }, "Delete my data");
@@ -319,6 +366,7 @@ function render() {
     source ? el("h2", {}, "Your email") : null, source,
     el("h2", {}, "How Guardian helps"), el("div", { class: "row" }, tell, doIt),
     family ? el("h2", {}, "Who we tell") : null, family,
+    el("h2", {}, "Alerts"), alertsOut, alertsBtn,
     el("h2", {}, "Settings"), pause, el("a", { class: "button secondary", href: "/privacy" }, "What Guardian reads and keeps"), signOut, del);
 }
 
