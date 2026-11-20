@@ -2,7 +2,8 @@
 
 Needs HTTPS (or localhost) and, on iPhone, Guardian added to the Home Screen (iOS 16.4+). Each push is
 encrypted end to end for that one device (aes128gcm); the push service (Apple, Google, Mozilla) only
-carries it. Even so, a push never contains message text: only "Guardian found 2 new things".
+carries it. A push says what kind of threat it is and who it came from (a number or sender address) so
+the person can act at once; it never contains the message itself.
 
 The VAPID key that signs pushes is created once in users/vapid_private.pem (owner-only), or set
 VAPID_PRIVATE_KEY_FILE to keep it elsewhere. GUARDIAN_CONTACT is the contact push services may use
@@ -45,11 +46,13 @@ def contact():
     return c if c.startswith(("mailto:", "https:")) else "mailto:" + c
 
 
-def send(subscription, title, body):
-    """Returns "ok", "gone" (the device unsubscribed: forget it) or "error"."""
+def send(subscription, title, body, data=None):
+    """Returns "ok", "gone" (the device unsubscribed: forget it) or "error".
+
+    `data` (which threat, which buttons) travels encrypted with the title and body."""
     _vapid()  # make sure the signing key exists
     try:
-        webpush(subscription_info=subscription, data=json.dumps({"title": title, "body": body}),
+        webpush(subscription_info=subscription, data=json.dumps(dict(data or {}, title=title, body=body)),
                 vapid_private_key=_key_path(),
                 vapid_claims={"sub": contact()}, ttl=12 * 3600, timeout=10)
         return "ok"

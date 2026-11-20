@@ -120,7 +120,7 @@ class ResponseTests(Base):
         s = self.run_once()
         self.assertEqual(s["stopped"], 0)
         self.assertEqual(s["family_told"], 0)
-        self.assertEqual(s["alerts"], 7)  # every threat but the phishing email, which is quarantined instead
+        self.assertEqual(s["alerts"], 8)  # every threat, the phishing email included: the person hears first
 
     def test_family_needs_consent(self):
         prof = detect.load("profile.json", self.data)
@@ -441,7 +441,7 @@ class DemoTests(Base):
         live.build(self.data, os.path.join(self.tmp, "live.html"), runs)
         rows = [json.loads(l) for name in os.listdir(runs) if name.startswith("live-") and name.endswith(".jsonl")
                 for l in open(os.path.join(runs, name))]
-        self.assertEqual([r["tool"] for r in rows], ["live_listening", "live_warning", "live_outcome"])
+        self.assertEqual([r["tool"] for r in rows], ["live_listening", "live_warning", "live_offer_block"])
         self.assertIn("money", rows[1]["output"]["headline"])
 
     def test_stand_in_is_redated_only_when_stale_and_real_results_are_kept(self):

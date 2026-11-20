@@ -654,18 +654,70 @@ class Push(unittest.TestCase):
         self.assertEqual(json.loads(plain), {"title": "Guardian", "body": "Guardian found 2 new things. Tap to see."})
         self.assertEqual(len(push.public_key()), 87)  # 65-byte P-256 point, base64url
 
-    def test_new_findings_push_a_count_never_content_and_dead_devices_are_dropped(self):
-        uid = confirmed_user("Push")
-        core.add_push(uid, {"endpoint": "https://push.example/dev1", "keys": {"p256dh": "k1", "auth": "a1"}})
-        core.add_push(uid, {"endpoint": "https://push.example/dev2", "keys": {"p256dh": "k2", "auth": "a2"}})
+    def stub_push(self, uid, gone=()):
         sent = []
         original = push.send
-        push.send = lambda sub, title, body: (sent.append((sub["endpoint"], body)) or
-                                              ("gone" if sub["endpoint"].endswith("dev2") else "ok"))
+        outbox = os.path.join(USERS_TMP, uid, "outbox", "blocked_numbers.jsonl")
+
+        def fake(sub, title, body, data=None):
+            blocked = open(outbox).read() if os.path.exists(outbox) else ""
+            sent.append({"endpoint": sub["endpoint"], "title": title, "body": body, "data": data or {},
+                         "blocked_already": blocked})
+            return "gone" if sub["endpoint"] in gone else "ok"
+        push.send = fake
         self.addCleanup(setattr, push, "send", original)
+        return sent
+
+    def device(self, uid, name="dev1"):
+        core.add_push(uid, {"endpoint": "https://push.example/" + name, "keys": {"p256dh": "k", "auth": "a"}})
+
+    def test_each_scam_is_pushed_first_with_who_and_what_never_the_message(self):
+        uid = confirmed_user("Push")
+        self.device(uid)
+        sent = self.stub_push(uid)
         core.setup(uid, "me", None, None, None, "act", True)
         core.run_for(uid)
-        self.assertEqual(sent[0][1], "Guardian found 8 new things. Tap to see.")
+        first = sent[0]
+        self.assertEqual(first["title"], "Likely scam voicemail")
+        self.assertIn("From +1-555-0100", first["body"])
+        self.assertNotIn("safe account", json.dumps(sent))  # the voicemail's words never travel
+        self.assertEqual([a["action"] for a in first["data"]["actions"]], ["undo", "read"])  # Act for me
+        self.assertEqual(first["data"]["threat"], "scam:c-201")
+        self.assertNotIn("+1-555-0100", first["blocked_already"])  # told before Guardian blocked it
+        self.assertEqual(len([p for p in sent if p["title"].startswith("Likely scam")]), 3)  # at most 3 per check
+        self.assertRegex(sent[-1]["body"], r"^And \d+ more things to look at")
+        self.assertTrue(os.path.exists(os.path.join(USERS_TMP, uid, "outbox", "blocked_numbers.jsonl")))
+
+    def test_just_tell_me_offers_block_and_saying_yes_blocks(self):
+        uid = confirmed_user("Tell")
+        self.device(uid)
+        sent = self.stub_push(uid)
+        core.setup(uid, "me", None, None, None, "tell", True)
+        core.run_for(uid)
+        self.assertEqual(sent[0]["data"]["actions"][0], {"action": "act", "title": "Block number"})
+        ask = next(n for n in core.feed(uid)["needs_you"] if n["threat"] == "scam:c-201")
+        self.assertEqual(ask["ask"], "Block +1-555-0100? Guardian thinks it's a scam.")
+        core.approve(uid, ask["key"])
+        item = next(i for i in core.feed(uid)["items"] if i["threat"] == "scam:c-201")
+        self.assertIn("Number blocked", item["did"])
+
+    def test_shadow_or_paused_alerts_have_no_act_button(self):
+        uid = confirmed_user("Paused")
+        self.device(uid)
+        sent = self.stub_push(uid)
+        core.setup(uid, "me", None, None, None, "act", True)
+        core.set_paused(uid, True)
+        core.run_for(uid)
+        self.assertTrue(sent)
+        self.assertTrue(all([a["action"] for a in p["data"]["actions"]] == ["read"] for p in sent))
+
+    def test_dead_devices_are_dropped(self):
+        uid = confirmed_user("Dead")
+        self.device(uid, "dev1")
+        self.device(uid, "dev2")
+        self.stub_push(uid, gone=("https://push.example/dev2",))
+        core.setup(uid, "me", None, None, None, "act", True)
+        core.run_for(uid)
         self.assertEqual([s["endpoint"] for s in core.load(uid)["push"]], ["https://push.example/dev1"])
 
     def test_bad_subscriptions_are_refused(self):

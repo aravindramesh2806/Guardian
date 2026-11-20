@@ -99,6 +99,11 @@ body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font-family:syst
 button{margin:14px 0 0;width:100%%;padding:10px;border-radius:8px;border:1px solid var(--line);
  background:transparent;color:var(--fg);font-size:15px;cursor:pointer}
 .why{font-size:13px;color:var(--muted);margin-top:12px}
+button.primary{background:#9b2c2c;border-color:#9b2c2c;color:#fff;font-weight:600;padding:14px}
+.ask{font-weight:600;margin:16px 0 0}
+.island.ok{width:338px;height:74px;border-radius:30px;background:#2d3748;align-items:flex-start;
+ padding:14px 16px;justify-content:flex-start;flex-direction:column;gap:4px}
+.island.ok ~ .call{padding-top:100px}
 </style></head><body><div class="wrap">
 <div class="phone"><div class="screen">
 <div class="island" id="island"></div>
@@ -107,6 +112,11 @@ button{margin:14px 0 0;width:100%%;padding:10px;border-radius:8px;border:1px sol
 <div class="meter"><i id="bar"></i></div>
 <div class="cap"><span>Scam score</span><span id="score">0.00</span></div></div>
 </div></div>
+<div id="choice" hidden>
+<p class="ask">Guardian thinks this is a scam. What would you like to do?</p>
+<button id="block" class="primary">Block this number and hang up</button>
+<button id="keep">I know this caller</button>
+</div>
 <button id="play">Replay the call</button>
 <p class="why" id="why">Replay of a fictional call. Guardian scores only the caller's words, after every turn.</p>
 </div>
@@ -115,11 +125,18 @@ const DATA = %s;
 const $ = (id) => document.getElementById(id);
 let timers = [];
 function island(state, html) { const el = $("island"); el.className = "island " + state; el.innerHTML = html; }
+function islandText(state, title, small) {
+  const el = $("island"); el.className = "island " + state;
+  const b = document.createElement("b"); b.textContent = title;
+  const s = document.createElement("small"); s.textContent = small;
+  el.replaceChildren(b, s);
+}
 function reset() {
   timers.forEach(clearTimeout); timers = [];
   $("log").innerHTML = ""; $("bar").style.width = "0"; $("bar").style.background = "#48bb78";
   $("score").textContent = "0.00"; $("name").textContent = DATA.caller_id; $("num").textContent = DATA.from;
   island("", "");
+  $("choice").hidden = true;
   $("why").textContent = "Replay of a fictional call. Guardian scores only the caller's words, after every turn.";
 }
 function step(row) {
@@ -130,8 +147,10 @@ function step(row) {
   $("bar").style.width = Math.round(row.score * 100) + "%%";
   $("bar").style.background = row.level === "scam" ? "#e53e3e" : row.level === "watch" ? "#ecc94b" : "#48bb78";
   if (row.alert) {
-    island("scam", "<b>Hang up. This looks like a scam.</b><small>" + row.headline.replace(/</g, "&lt;") + "</small>");
+    // First tell the person, then offer to block: Guardian never blocks a caller on its own mid-call.
+    islandText("scam", "Hang up. This looks like a scam.", row.headline);
     $("why").textContent = "Why: " + row.reasons.join("; ") + ".";
+    $("choice").hidden = false;
   }
 }
 function play() {
@@ -139,12 +158,17 @@ function play() {
   island("listen", '<span class="dot"></span>Guardian is listening');
   const t0 = DATA.rows[0].t;
   DATA.rows.forEach((row) => timers.push(setTimeout(() => step(row), (row.t - t0 + 1) * 700)));
-  const end = (DATA.rows[DATA.rows.length - 1].t - t0 + 3) * 700;
-  timers.push(setTimeout(() => {
-    const told = DATA.outcome.told.length ? " " + DATA.outcome.told.join(", ") + " was told." : "";
-    island("done", "<b>Blocked.</b><small>" + DATA.outcome.blocked + " blocked." + told + "</small>");
-  }, end));
 }
+$("block").addEventListener("click", () => {
+  timers.forEach(clearTimeout); timers = [];
+  const told = DATA.outcome.told.length ? " " + DATA.outcome.told.join(", ") + " was told." : "";
+  islandText("done", "Blocked.", DATA.outcome.blocked + " blocked." + told);
+  $("choice").hidden = true;
+});
+$("keep").addEventListener("click", () => {
+  islandText("ok", "Not blocked.", "Guardian keeps listening. Never share a code or pay by gift card.");
+  $("choice").hidden = true;
+});
 $("play").addEventListener("click", play);
 play();
 </script></body></html>"""
@@ -172,7 +196,9 @@ def build(data_dir=None, out=None, run_dir=None):
         if r["alert"]:
             log.event("warn", "live_warning", {"call": call["id"], "t": r["t"]},
                       {"score": r["score"], "headline": r["headline"], "reasons": r["reasons"]}, subject)
-    log.event("act", "live_outcome", {"call": call["id"]}, result, subject)
+    # Live, Guardian warns first and then offers the block: the person decides, mid-call.
+    log.event("act", "live_offer_block", {"call": call["id"]},
+              {"offered": "block_number", "number": result["blocked"], "family_told_if_blocked": result["told"]}, subject)
     out = out or os.path.join(ROOT, "web", "live.html")
     with open(out, "w") as f:
         f.write(page(call, rows, result))

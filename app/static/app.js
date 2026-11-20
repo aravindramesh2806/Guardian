@@ -257,13 +257,15 @@ function statusBox(f) {
 function itemCard(it) {
   const tag = it.marked_real ? el("span", { class: "tag done" }, "You said this was real")
     : el("span", { class: "tag " + (it.severity === "high" ? "high" : "medium") }, it.severity === "high" ? "Scam or attack" : "Heads up");
-  const card = el("div", { class: "card item" }, tag, el("h3", {}, it.summary));
+  const card = el("div", { class: "card item", "data-threat": it.threat }, tag, el("h3", {}, it.summary));
   if (it.did.length && !it.marked_real) card.append(el("p", { class: "did" }, "Guardian: " + it.did.join(" · ")));
   if (!it.marked_real && (it.would || []).length) card.append(el("p", { class: "muted" },
     (feedCache && feedCache.shadow ? "Shadow mode. Guardian would have: " : "Paused. Guardian would have: ") + it.would.join(" · ")));
   if (!it.marked_real) it.waiting.forEach((w) => card.append(el("p", { class: "muted" }, "Waiting: " + w)));
   if (!it.did.length && !it.waiting.length && !(it.would || []).length && !it.marked_real) card.append(el("p", { class: "muted" }, "Nothing done by itself. Just letting you know."));
-  if (it.steps) card.append(el("details", {}, el("summary", {}, "What to do"), el("pre", { class: "steps" }, it.steps)));
+  const reading = intent && intent.kind === "read" && intent.threat === it.threat;
+  if (it.steps) card.append(el("details", { open: reading }, el("summary", {}, "What to do"), el("pre", { class: "steps" }, it.steps)));
+  if (reading) card.classList.add("focus");
   if (!it.marked_real) {
     const real = el("button", { class: "secondary" }, "This was real, not a scam");
     real.addEventListener("click", () => busy(real, async () => {
@@ -276,12 +278,39 @@ function itemCard(it) {
   return card;
 }
 
-let notice = null;
+let notice = null, intent = null;
 {
   const q = new URLSearchParams(location.search);
   if (q.get("gmail") === "connected") notice = { ok: true, text: "Gmail connected, in shadow mode." };
   if (q.get("gmail_error")) notice = { ok: false, text: q.get("gmail_error") };
-  if (notice) history.replaceState(null, "", "/");
+  // From an alert's buttons: act (block, move aside, lock), undo ("It was real") or read (see details).
+  for (const kind of ["act", "undo", "read"]) if (q.get(kind)) intent = { kind, threat: q.get(kind) };
+  if (notice || intent) history.replaceState(null, "", "/");
+}
+
+function intentCard(f, act) {
+  if (!intent) return null;
+  const it = f.items.find((i) => i.threat === intent.threat);
+  const done = () => { intent = null; };
+  if (intent.kind === "act") {
+    const ask = f.needs_you.find((n) => n.threat === intent.threat);
+    if (!ask) { done(); return el("div", { class: "status ok" }, "Nothing to do for this one right now.",
+      el("span", {}, it && it.did.length ? "Guardian: " + it.did.join(" · ") : "It may already be handled.")); }
+    const yes = el("button", {}, "Yes, do it");
+    act(yes, async () => { const r = await call("/api/approve", { key: ask.key }); done(); return r; });
+    const no = el("button", { class: "secondary", onclick: () => { done(); render(); } }, "Not now");
+    return el("div", { class: "card focus" }, el("span", { class: "tag high" }, "Likely scam"),
+      it ? el("h3", {}, it.summary) : null, el("p", {}, ask.ask),
+      el("p", { class: "muted small" }, "You'll confirm with Face ID or fingerprint."), yes, no);
+  }
+  if (intent.kind === "undo" && it && !it.marked_real) {
+    const yes = el("button", {}, "Yes, it was real");
+    act(yes, async () => { const r = await call("/api/real", { threat: it.threat }); done(); return r.feed; });
+    const no = el("button", { class: "secondary", onclick: () => { done(); render(); } }, "No, it was a scam");
+    return el("div", { class: "card focus" }, el("h3", {}, "Was this real?"), el("p", {}, it.summary),
+      el("p", { class: "muted" }, "Guardian will undo what it did and won't act on it again."), yes, no);
+  }
+  return null;
 }
 
 function render() {
@@ -354,7 +383,7 @@ function render() {
   show(
     el("h1", {}, "Hello, " + f.name),
     statusBox(f), err,
-    banner,
+    banner, intentCard(f, act),
     f.data_source === "sample" ? el("p", { class: "notice" }, "Showing sample data until you connect Gmail.") : null,
     f.data_source === "none" ? el("p", { class: "notice" }, "Guardian isn't watching any email right now.") : null,
     checkNow,
@@ -374,6 +403,11 @@ async function home() {
   try { feedCache = await call("/api/feed"); } catch (e) { return welcome(); }
   seenThreats = new Set(feedCache.items.map((i) => i.threat));
   render();
+  if (intent && intent.kind === "read") {
+    const target = document.querySelector('[data-threat="' + CSS.escape(intent.threat) + '"]');
+    if (target) target.scrollIntoView({ block: "center" });
+    intent = null;
+  }
   clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     try {
