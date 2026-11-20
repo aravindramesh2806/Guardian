@@ -300,8 +300,46 @@ def _source(name, service, sources, remote, local):
     return items
 
 
-def all_threats(data_dir=None, senior=None, sources=None):
-    """Run every detector over the person's data. `sources` (a dict) is filled with where each input came from."""
+def second_look(profile, inbox, calls, found, ask):
+    """Ask a model about messages from unknown senders that the rules let through.
+
+    Raise-only: a model answer can add a "suspicious" alert, which only ever alerts (respond.decide). It can
+    never quarantine, block or lock anything, and never clears a rule hit. So a message that talks the model
+    into anything costs at most one extra alert. `ask(key, text)` returns (label, decided_by) or (None, why).
+    """
+    seen = {t["evidence"].get(k) for t in found for k in ("email", "call")}
+    known = [a["domain"] for a in profile.get("accounts", [])]
+    numbers = {c["number"] for c in profile.get("phone_contacts", [])}
+    out = []
+    for m in inbox:
+        sender = domain_of(m.get("from", ""))
+        if m["id"] in seen or any(same_site(sender, d) for d in known):
+            continue
+        label, by = ask("email:" + m["id"], "Email from %s\nSubject: %s\n\n%s" % (
+            m.get("from", ""), m.get("subject", ""), m.get("body", "")))
+        if label in ("phishing", "suspicious"):
+            out.append(_threat("suspicious", "suspicious:%s" % m["id"], "medium",
+                               "Suspicious email from %s: \"%s\"" % (m.get("from", ""), m.get("subject", "")),
+                               {"email": m["id"], "from": m.get("from", ""), "score": None,
+                                "reasons": ["a language model flagged it; the rules did not"], "decided_by": by}))
+    for c in calls:
+        if c["id"] in seen or c.get("from") in numbers:
+            continue
+        label, by = ask("call:" + c["id"], "%s from %s (shows as %s)\n\n%s" % (
+            c.get("kind", "call"), c.get("from", ""), c.get("caller_id", "Unknown"), c.get("transcript", "")))
+        if label in ("phishing", "suspicious"):
+            out.append(_threat("suspicious", "suspicious:%s" % c["id"], "medium",
+                               "Possibly a scam %s from %s" % (c.get("kind", "call"), c.get("from", "")),
+                               {"call": c["id"], "from": c.get("from", ""), "score": None,
+                                "reasons": ["a language model flagged it; the rules did not"], "decided_by": by}))
+    return out
+
+
+def all_threats(data_dir=None, senior=None, sources=None, ask=None):
+    """Run every detector over the person's data. `sources` (a dict) is filled with where each input came from.
+
+    `ask`, when given, is the model's second look at unknown senders the rules let through (second_look).
+    """
     from agent import firedrill
     sources = {} if sources is None else sources
     profile = load("profile.json", data_dir)
@@ -314,6 +352,9 @@ def all_threats(data_dir=None, senior=None, sources=None):
              + phishing(profile, inbox)
              + scam_calls(profile, load("calls.json", data_dir), senior)
              + card_misuse(profile, charges, receipts))
+    calls = load("calls.json", data_dir)
+    if ask is not None:
+        found += second_look(profile, inbox, calls, found, ask)
     # Most urgent first: things a scammer is doing right now, then money, then accounts, then news.
     severity = {"high": 0, "medium": 1}
     urgency = {"scam_call": 0, "card_misuse": 1, "takeover": 2, "phishing": 3, "suspicious": 4,

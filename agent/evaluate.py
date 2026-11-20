@@ -2,6 +2,7 @@
 
     python3 agent/evaluate.py            # both people, prints the scorecard, writes runs/eval/
     python3 agent/evaluate.py rose
+    python3 agent/evaluate.py --holdout --model   # with the model's second look (needs SIE_* in .env)
 
 Replays 30 days, one run per evening, against a fresh local store, with no network services (Statsig,
 Amplitude, SingleStore, the model and Firedrill are switched off for the run). Each day sees only the
@@ -55,8 +56,9 @@ def _day_files(world, folder, day):
                                          "checked_at": cut + "T08:00:00", "source": "synthetic"})
 
 
-def evaluate(name, seed=7, days=30, workdir=None, variant="dev"):
-    saved = {k: os.environ.pop(k) for k in OFFLINE if k in os.environ}
+def evaluate(name, seed=7, days=30, workdir=None, variant="dev", use_model=False):
+    keep = ("SIE_BASE_URL", "SIE_API_KEY", "SIE_MODEL") if use_model else ()
+    saved = {k: os.environ.pop(k) for k in OFFLINE if k in os.environ and k not in keep}
     own_tmp = workdir is None
     workdir = workdir or tempfile.mkdtemp(prefix="guardian-eval-")
     try:
@@ -95,7 +97,7 @@ def evaluate(name, seed=7, days=30, workdir=None, variant="dev"):
         fp_act = Counter("%s -> %s" % (i["_case"], "+".join(sorted(set(acted[i["id"]]))))
                          for i in legit if acted.get(i["id"]))
         result = {
-            "person": name, "variant": variant, "seed": seed, "days": days,
+            "person": name, "variant": variant, "model": use_model, "seed": seed, "days": days,
             "items": {"threat": len(threats), "legit": len(legit)},
             "recall": round(len(caught) / max(len(threats), 1), 3),
             "caught_as_high": len(caught) - sum(weak.values()),
@@ -143,9 +145,12 @@ if __name__ == "__main__":
     names = [a for a in args if not a.startswith("--")] or ["rose", "jordan"]
     out_dir = os.path.join(runner.ROOT, "runs", "eval")
     os.makedirs(out_dir, exist_ok=True)
-    results = [evaluate(n, variant=variant) for n in names]
+    use_model = "--model" in args
+    if use_model:
+        runner.load_env()
+    results = [evaluate(n, variant=variant, use_model=use_model) for n in names]
     for r in results:
         show(r)
-        with open(os.path.join(out_dir, "%s-%s.json" % (r["person"], variant)), "w") as f:
+        with open(os.path.join(out_dir, "%s-%s%s.json" % (r["person"], variant, "-model" if use_model else "")), "w") as f:
             json.dump(r, f, indent=2)
     print("\nOverall: %s" % ("MEETS THE BAR" if all(r["meets_bar"] for r in results) else "DOES NOT MEET THE BAR yet"))

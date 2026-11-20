@@ -7,7 +7,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent import detect, flags, respond
+from agent import detect, flags, models, respond
 from agent import store as st
 from agent.audit import AuditLog
 
@@ -61,6 +61,27 @@ def handle(threat, ctx):
             "summary": threat["summary"], "evidence": threat["evidence"], "new": is_new, "actions": outcomes}
 
 
+def make_ask(store, now, budget):
+    """The model's second look, cached per message in the store and capped per run. None if no model is set."""
+    if not models.configured():
+        return None
+    used = {"calls": 0}
+
+    def ask(key, text):
+        cached = st.verdict_get(store, key)
+        if cached:
+            return cached["label"], cached["decided_by"]
+        if used["calls"] >= budget:
+            return None, "model budget for this run used up"
+        used["calls"] += 1
+        label, by = models.classify(text, default="unknown")
+        if not by.startswith("rules"):  # only a real answer is cached; an error is asked again next run
+            st.verdict_put(store, key, label, by, now)
+        return label, by
+    ask.used = used
+    return ask
+
+
 def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None):
     run_id = "run-" + time.strftime("%Y%m%d-%H%M%S") + "-%04d" % (int(time.time() * 1000) % 10000)
     run_dir = run_dir or os.path.join(ROOT, "runs")
@@ -78,7 +99,9 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
     ctx["log"].gates = ctx["gates"]
     ctx["log"].event("gates", "check_gates", {}, ctx["flags"], "run")
     sources = {}
-    threats = detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"], sources=sources)
+    ask = make_ask(ctx["store"], ctx["now"], int(os.environ.get("GUARDIAN_MODEL_BUDGET", "40")))
+    threats = detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"], sources=sources, ask=ask)
+    sources["model_second_look"] = ("%d asked" % ask.used["calls"]) if ask else "off (no model configured)"
     ctx["log"].event("sources", "read_sources", {}, sources, "run")
     results = [handle(t, ctx) for t in threats]
 

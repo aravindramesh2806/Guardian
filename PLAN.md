@@ -206,6 +206,7 @@ What it means:
 - **Not yet good enough at new scams:** the 100% on the dev set is the rules learning those cases. On
   scams phrased differently (benefits-card, "reply with the code", "press 1 for a refund", mailbox-full,
   prize and lottery fees), keyword rules catch 20 to 44%.
+- **Built, waiting for a key:** the model's second look (`detect.second_look`). Measure it with `python3 agent/evaluate.py --holdout --model`.
 - **Next for recall:** a language model on every message from an unknown sender (SIE, raise-only, as L1
   requires), measured on the held-out set and a fresh set written by someone who has not read the rules.
   Real recall is only known from shadow mode on real mail.

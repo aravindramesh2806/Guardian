@@ -92,6 +92,68 @@ class Failures(Base):
         self.assertIn("model error", by)
 
 
+class SecondLook(Base):
+    """The model's look at unknown senders the rules let through: raise-only, cached, capped."""
+
+    def stub(self, verdict):
+        asked = []
+        original = (models.configured, models.classify)
+        models.configured = lambda: True
+        models.classify = lambda text, default="suspicious": (asked.append(text) or verdict(text), "stub-model")
+        self.addCleanup(lambda: (setattr(models, "configured", original[0]), setattr(models, "classify", original[1])))
+        return asked
+
+    def add_email(self, **kw):
+        inbox = detect.load("inbox.json", self.data)
+        inbox.append(email(**kw))
+        with open(os.path.join(self.data, "inbox.json"), "w") as f:
+            json.dump(inbox, f)
+
+    def test_model_can_add_an_alert_but_never_an_action(self):
+        asked = self.stub(lambda text: "phishing")  # a model that calls everything a scam
+        self.add_email(id="u-1", **{"from": "benefits@office-mail.test", "subject": "Your card is expiring",
+                                    "body": "Confirm your social security number to get a new one."})
+        s = self.run_once()
+        r = self.by_key(s)["suspicious:u-1"]
+        self.assertEqual([a["action"] for a in r["actions"]], ["alert"])
+        self.assertIn("language model", r["evidence"]["reasons"][0])
+        # Even calling every unknown sender a scam, nothing new was quarantined, blocked or locked.
+        self.assertEqual(s["stopped"], 5)
+        self.assertTrue(asked)
+
+    def test_known_senders_and_rule_hits_are_not_sent_to_the_model(self):
+        asked = self.stub(lambda text: "safe")
+        self.run_once()
+        joined = "\n".join(asked)
+        self.assertNotIn("examplebank.example", joined)      # her own bank
+        self.assertNotIn("paylinc.example", joined)         # already caught by the rules
+        self.assertNotIn("+1-555-0150", joined)              # a saved contact
+
+    def test_a_safe_answer_never_clears_a_rule_hit(self):
+        self.stub(lambda text: "safe")
+        self.assertIn("phishing:m-101", self.by_key(self.run_once()))
+
+    def test_answers_are_cached_so_the_next_run_asks_nothing(self):
+        asked = self.stub(lambda text: "safe")
+        self.run_once()
+        first = len(asked)
+        s = self.run_once()
+        self.assertGreater(first, 0)
+        self.assertEqual(len(asked), first)
+        self.assertEqual(s["sources"]["model_second_look"], "0 asked")
+
+    def test_budget_caps_model_calls_per_run(self):
+        asked = self.stub(lambda text: "safe")
+        os.environ["GUARDIAN_MODEL_BUDGET"] = "1"
+        self.addCleanup(os.environ.pop, "GUARDIAN_MODEL_BUDGET", None)
+        self.run_once()
+        self.assertEqual(len(asked), 1)
+
+    def test_off_without_a_model(self):
+        s = self.run_once()
+        self.assertEqual(s["sources"]["model_second_look"], "off (no model configured)")
+
+
 class QualityBar(unittest.TestCase):
     """The MVP bar on a month of synthetic data (agent/evaluate.py). See PLAN.md section 6."""
 

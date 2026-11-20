@@ -441,7 +441,7 @@ class FiredrillTests(Base):
 
     def test_drill_finds_the_same_threats_and_acts_on_the_services(self):
         s = self.run_once()
-        self.assertEqual(s["sources"], {"inbox": "firedrill (5)", "card_charges": "firedrill (5)"})
+        self.assertEqual((s["sources"]["inbox"], s["sources"]["card_charges"]), ("firedrill (5)", "firedrill (5)"))
         self.assertEqual((s["threats"], s["stopped"], s["family_told"], s["failed"]), (8, 5, 3, 0))
         modify = [c for c in self.fd.ops("gmail") if c[1] == "messages.modify"]
         self.assertEqual(len(modify), 1)

@@ -17,6 +17,8 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS actions (
         action_key VARCHAR(128) PRIMARY KEY, threat_key VARCHAR(128), action VARCHAR(32),
         status VARCHAR(64), detail TEXT, run_id VARCHAR(64), created_at VARCHAR(32))""",
+    """CREATE TABLE IF NOT EXISTS verdicts (
+        item_key VARCHAR(128) PRIMARY KEY, label VARCHAR(16), decided_by VARCHAR(128), created_at VARCHAR(32))""",
 ]
 
 
@@ -96,6 +98,19 @@ def reset(store):
     """Forget every threat and action. For demo resets only: the next run treats everything as new."""
     store.exec("DELETE FROM actions")
     store.exec("DELETE FROM threats")
+    store.exec("DELETE FROM verdicts")
+
+
+def verdict_get(store, key):
+    """A model's earlier answer for one message, so daily runs never ask about it twice."""
+    found = store.rows("SELECT label, decided_by FROM verdicts WHERE item_key = %s", (key,))
+    return found[0] if found else None
+
+
+def verdict_put(store, key, label, decided_by, at):
+    store.exec("DELETE FROM verdicts WHERE item_key = %s", (key,))
+    store.exec("INSERT INTO verdicts (item_key, label, decided_by, created_at) VALUES (%s, %s, %s, %s)",
+               (key, label, decided_by, at))
 
 
 def threat_seen(store, key):
