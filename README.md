@@ -27,6 +27,7 @@ python3 agent/demo.py      # before a demo: reset the store, run, build both pag
 npm install               # Statsig web SDK (only needed to refresh web/vendor/statsig.min.js)
 python3 agent/run.py      # detect, decide, act, record
 python3 agent/brief.py    # daily brief + web/report.html
+python3 agent/settings.py set auto_lock_card off   # your own changes; lowering protection needs Persona
 python3 agent/live.py     # replay a live scam call + web/live.html (Dynamic Island warning)
 (cd persona && npm install && npm test)   # Persona Relay sidecar; `node persona/server.js` with PERSONA_API_KEY set
 python3 -m unittest discover -s tests -t .
@@ -106,7 +107,7 @@ family alerts, disputes). Replacing one with a real integration changes only its
 | Amplitude | Audit trail: every detect, guard and act step is an event, with the run's gate values | **Live and verified** with `AMPLITUDE_API_KEY` |
 | SingleStore | Threats and actions store (the "never repeat" check) | **Live and verified** when `SINGLESTORE_*` is set (Data API, two runs: 8 new threats, then 0); SQLite otherwise |
 | Superlinked SIE | Borderline phishing and call checks; alert drafting with a fact guard | Live when `SIE_*` is set; rules and templates otherwise. Endpoint shape not yet verified |
-| Persona Relay | `live_human_presence` check before Guardian may lock a card | **Live and verified** (sandbox, 2026-11-20): `persona/` sidecar, run on a laptop browser (Persona's widget blocks headless browsers), wrote `result: passed` to `data/verification.json`. A pass counts for 24 hours |
+| Persona Relay | `live_human_presence` check before Guardian may lock a card (pass under 24 hours), and before the person turns protection down, changes trusted contacts, unlocks a card or releases a quarantined email (pass under 15 minutes, `agent/settings.py`) | **Live and verified** (sandbox, 2026-11-20): `persona/` sidecar, run on a laptop browser (Persona's widget blocks headless browsers), wrote `result: passed` to `data/verification.json` |
 | Firedrill | Synthetic Gmail (inbox, quarantine), Stripe (card charges) and Slack (family alerts) for drills | Wired in (`agent/firedrill.py`) when `GUARDIAN_GMAIL_URL`, `GUARDIAN_STRIPE_URL`, `GUARDIAN_SLACK_URL` are set; tested against a local fake. Operation names not yet confirmed with `firedrill tools catalog-operations` |
 | Statsig (web) | Report page: session replay, auto-capture analytics, `guardian_report_viewed` and `guardian_threat_opened` events | **Live and verified** with `STATSIG_CLIENT_KEY` (initialize 200, events 202) |
 | Statsig (gates) | `senior_protection`, auto-block, auto-quarantine, auto-lock, disputes, family alerts, kill switch; every gate's value and source goes into each Amplitude event | **Live and verified** when `STATSIG_SERVER_SECRET` is set (`agent/flags.py`, all 7 gates read as `statsig`); `data/gates.json` otherwise |

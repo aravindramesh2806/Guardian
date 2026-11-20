@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 for _k in ("SIE_BASE_URL", "SINGLESTORE_HOST", "AMPLITUDE_API_KEY"):
     os.environ.pop(_k, None)
 
-from agent import audit, brief, demo, detect, flags, live, models, respond
+from agent import audit, brief, demo, detect, flags, live, models, respond, settings
 from agent import run as runner
 from agent import store as st
 
@@ -137,6 +137,79 @@ class ResponseTests(Base):
         self.assertEqual(by, "template")
         self.assertIn("$389.00", text)
         self.assertIn("1.", text)
+
+
+class PersonRequestTests(Base):
+    """Turning protection down, changing contacts and undoing locks need a fresh Persona pass."""
+    NOW = "2026-11-20T08:10:00"  # 10 minutes after the pinned Persona pass
+
+    def handle(self, words, now=NOW):
+        return settings.handle(settings.parse(words), data_dir=self.data, run_dir=os.path.join(self.tmp, "runs"),
+                               outbox_dir=os.path.join(self.tmp, "outbox"), now=now, store=self.store)
+
+    def test_a_pass_kept_in_the_store_wins_over_the_file(self):
+        self.edit("verification.json", result="failed")
+        st.save_claim(self.store, "live_human_presence", "passed", "2026-11-20T08:05:00", "Persona Relay sandbox")
+        self.assertEqual(self.handle(["unlock", "card-visa-4821"])["status"], "card ending 4821 unlocked (simulated)")
+
+    def test_turning_protection_down_needs_a_fresh_check(self):
+        out = self.handle(["set", "auto_lock_card", "off"], now="2026-11-20T09:00:00")
+        self.assertEqual(out["status"], "waiting for you")
+        self.assertIn("last 15 minutes", out["reason"])
+        self.assertTrue(detect.load("gates.json", self.data)["auto_lock_card"])
+        self.assertEqual(self.handle(["set", "auto_lock_card", "off"])["status"], "auto_lock_card turned off")
+        self.assertFalse(detect.load("gates.json", self.data)["auto_lock_card"])
+
+    def test_a_failed_check_holds_even_when_fresh(self):
+        self.edit("verification.json", result="failed")
+        self.assertEqual(self.handle(["set", "kill_switch", "on"])["status"], "waiting for you")
+        self.assertFalse(detect.load("gates.json", self.data)["kill_switch"])
+
+    def test_making_guardian_safer_never_needs_a_check(self):
+        self.edit("verification.json", result="failed")
+        self.edit("gates.json", kill_switch=True)
+        self.assertEqual(self.handle(["set", "kill_switch", "off"])["status"], "kill_switch turned off")
+        self.assertEqual(self.handle(["set", "dispute_needs_approval", "on"])["status"],
+                         "dispute_needs_approval turned on")
+
+    def test_senior_protection_lives_in_the_profile(self):
+        self.handle(["set", "senior_protection", "off"])
+        self.assertEqual(detect.load("profile.json", self.data)["protection"], "standard")
+
+    def test_contact_changes_need_a_check(self):
+        late = "2026-11-20T12:00:00"
+        for words in (["contact", "add", "Pat", "sms", "+1-555-0100", "--consent"],
+                      ["contact", "remove", "+1-555-0142"], ["contact", "consent", "+1-555-0142", "off"]):
+            self.assertEqual(self.handle(words, now=late)["status"], "waiting for you")
+        self.assertEqual(len(detect.load("profile.json", self.data)["trusted_contacts"]), 1)
+        self.handle(["contact", "add", "Pat", "sms", "+1-555-0100", "--consent"])
+        self.handle(["contact", "remove", "+1-555-0142"])
+        self.assertEqual([c["name"] for c in detect.load("profile.json", self.data)["trusted_contacts"]], ["Pat"])
+
+    def test_unlock_and_release_need_a_check(self):
+        for words in (["unlock", "card-visa-4821"], ["release", "m-101"]):
+            self.assertEqual(self.handle(words, now="2026-11-20T12:00:00")["status"], "waiting for you")
+        self.assertEqual(self.handle(["unlock", "card-visa-4821"])["status"], "card ending 4821 unlocked (simulated)")
+        self.assertTrue(self.handle(["release", "m-101"])["status"].endswith("(simulated)"))
+
+    def test_kill_switch_does_not_block_the_person(self):
+        self.edit("gates.json", kill_switch=True)
+        self.assertEqual(self.handle(["unlock", "card-visa-4821"])["status"], "card ending 4821 unlocked (simulated)")
+
+    def test_bad_requests_change_nothing(self):
+        self.assertEqual(self.handle(["unlock", "card-nope"])["status"], "not changed")
+        self.assertEqual(self.handle(["set", "make_coffee", "off"])["status"], "waiting for you")
+        with self.assertRaises(ValueError):
+            settings.parse(["set", "auto_lock_card", "maybe"])
+
+    def test_every_request_is_audited(self):
+        self.handle(["set", "auto_lock_card", "off"], now="2026-11-20T09:00:00")
+        rows = []
+        for name in os.listdir(os.path.join(self.tmp, "runs")):
+            with open(os.path.join(self.tmp, "runs", name)) as f:
+                rows += [json.loads(l) for l in f]
+        self.assertEqual([r["tool"] for r in rows], ["guard_change_setting", "act_change_setting"])
+        self.assertEqual(audit.analytics_properties(rows[1])["outcome"], "held")
 
 
 class BriefTests(Base):

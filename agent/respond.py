@@ -96,6 +96,13 @@ def decide(threat, profile):
 
 
 CLAIM_MAX_AGE = timedelta(hours=24)
+# Turning protection down, changing who gets family alerts, or undoing a lock or quarantine needs a pass
+# from the last few minutes: someone who has taken over the account would do exactly these things first.
+REQUEST_MAX_AGE = timedelta(minutes=15)
+
+# Each setting's safe value. Moving a setting TO it never needs a check; moving it away does.
+SAFE = {"senior_protection": True, "auto_quarantine": True, "auto_block_numbers": True, "auto_lock_card": True,
+        "notify_trusted_contacts": True, "dispute_needs_approval": True, "kill_switch": False}
 
 
 def _parse_time(ts):
@@ -104,13 +111,48 @@ def _parse_time(ts):
     return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
 
 
-def claim_fresh(verification, now):
-    """A Persona pass counts for 24 hours. Missing, unreadable or future times do not count."""
+def claim_fresh(verification, now, max_age=CLAIM_MAX_AGE):
+    """A Persona pass counts for `max_age` (24 hours by default). Missing, unreadable or future times do not count."""
     try:
         age = _parse_time(now) - _parse_time(verification["checked_at"])
     except (KeyError, TypeError, ValueError):
         return False
-    return timedelta(minutes=-5) <= age <= CLAIM_MAX_AGE
+    return timedelta(minutes=-5) <= age <= max_age
+
+
+def persona_ok(verification, now, max_age=CLAIM_MAX_AGE):
+    """Is there a passed Persona check, fresh enough? Returns (ok, reason). `now` None skips the time check."""
+    if verification.get("result") != "passed":
+        return False, "no verified person behind this agent yet (Persona check not passed)"
+    if now is not None and not claim_fresh(verification, now, max_age):
+        if max_age == CLAIM_MAX_AGE:
+            return False, "the Persona check is more than 24 hours old; verify again"
+        return False, "this change needs a Persona check from the last %d minutes; verify again" % (
+            max_age.total_seconds() // 60)
+    return True, "verified person"
+
+
+def guard_request(request, verification, now):
+    """May the person's own change go ahead? Returns (allowed, reason).
+
+    The kill switch does not apply here: these are the person's requests, not Guardian acting alone,
+    and the person must always be able to turn Guardian back on.
+    """
+    kind = request["type"]
+    if kind == "change_setting":
+        gate, value = request["gate"], request["value"]
+        if gate not in SAFE or not isinstance(value, bool):
+            return False, "unknown setting"
+        if value == SAFE[gate]:
+            return True, "makes Guardian safer; no check needed"
+        ok, reason = persona_ok(verification, now, REQUEST_MAX_AGE)
+        return (True, "verified person just now; protection turned down at their request") if ok else (False, reason)
+    if kind in ("change_contact", "unlock_card", "release_quarantine"):
+        ok, reason = persona_ok(verification, now, REQUEST_MAX_AGE)
+        what = {"change_contact": "who hears about scams changed", "unlock_card": "card unlocked",
+                "release_quarantine": "email released"}[kind]
+        return (True, "verified person just now; %s at their request" % what) if ok else (False, reason)
+    return False, "unknown request"
 
 
 def guard(action, gates, verification, profile, now=None, approved=()):
@@ -135,10 +177,9 @@ def guard(action, gates, verification, profile, now=None, approved=()):
     if action["type"] == "lock_card":
         if action.get("ask_first") and action["key"] not in approved:
             return False, "a small charge you may have made: Guardian asks before locking your card"
-        if verification.get("result") != "passed":
-            return False, "no verified person behind this agent yet (Persona check not passed)"
-        if now is not None and not claim_fresh(verification, now):
-            return False, "the Persona check is more than 24 hours old; verify again"
+        ok, reason = persona_ok(verification, now)
+        if not ok:
+            return False, reason
         if not gates.get("auto_lock_card"):
             return False, "auto-lock is off"
         c = card(profile, action["card"])
