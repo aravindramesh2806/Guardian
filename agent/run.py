@@ -14,6 +14,19 @@ from agent.audit import AuditLog
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def load_env(path=os.path.join(ROOT, ".env")):
+    """Read KEY=value lines from .env into the environment, without overriding what is already set."""
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                if value.strip():
+                    os.environ.setdefault(key.strip(), value.strip())
+
+
 def handle(threat, ctx):
     """Work one threat end to end. New threats are recorded; held actions are retried each run."""
     log, store, run_id, now = ctx["log"], ctx["store"], ctx["run_id"], ctx["now"]
@@ -78,6 +91,7 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None):
 
 
 if __name__ == "__main__":
+    load_env()
     s = run()
     print(json.dumps({k: v for k, v in s.items() if k != "results"}, indent=2))
     for r in s["results"]:
