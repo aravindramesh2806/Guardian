@@ -67,4 +67,5 @@ const dir = process.argv[2];
   console.log('8 deleted -> back at welcome');
   console.log('page errors:', JSON.stringify(errors));
   await b.close();
+  if (errors.length) { console.error('E2E FAILED: the page logged errors'); process.exit(1); }
 })().catch(e => { console.error('E2E FAILED:', e.message); process.exit(1); });
