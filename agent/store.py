@@ -59,7 +59,7 @@ class SingleStoreStore:
                            "database": self.database}, default=str).encode()
         req = urllib.request.Request(self.base + path, data=body, headers={
             "Content-Type": "application/json", "Authorization": self.auth})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=8) as resp:
             return json.loads(resp.read() or b"{}")
 
     def exec(self, sql, args=()):
@@ -71,13 +71,31 @@ class SingleStoreStore:
         return results[0].get("rows", [])
 
 
-def open_store(local_path):
-    """SingleStore when its settings exist, otherwise SQLite at local_path."""
+def open_store(local_path, remote=None):
+    """SingleStore when its settings exist, otherwise SQLite at local_path.
+
+    If SingleStore is configured but unreachable, protection must not stop: fall back to SQLite and say so
+    in the store's name (it shows in the run summary and the report). `remote` replaces the SingleStore
+    constructor in tests.
+    """
     env = os.environ
     keys = ("SINGLESTORE_HOST", "SINGLESTORE_USER", "SINGLESTORE_PASSWORD", "SINGLESTORE_DATABASE")
-    if all(env.get(k) for k in keys):
-        return SingleStoreStore(*(env[k] for k in keys))
+    if remote is None and all(env.get(k) for k in keys):
+        remote = lambda: SingleStoreStore(*(env[k] for k in keys))
+    if remote is not None:
+        try:
+            return remote()
+        except Exception as e:
+            local = LocalStore(local_path)
+            local.name = "sqlite (singlestore unreachable: %s)" % type(e).__name__
+            return local
     return LocalStore(local_path)
+
+
+def reset(store):
+    """Forget every threat and action. For demo resets only: the next run treats everything as new."""
+    store.exec("DELETE FROM actions")
+    store.exec("DELETE FROM threats")
 
 
 def threat_seen(store, key):

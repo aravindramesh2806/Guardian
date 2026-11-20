@@ -90,9 +90,14 @@ def phishing_score(message, known_domains):
     text = (message["subject"] + " " + message["body"]).lower()
     score, reasons = 0.0, []
     if sender not in known_domains:
+        # A real domain used as a prefix, e.g. examplebank.example.evil.test: the real owner is evil.test.
+        hidden = next((d for d in known_domains if sender.startswith(d + ".")), None)
         best = max(known_domains, key=lambda d: difflib.SequenceMatcher(None, sender, d).ratio())
         ratio = difflib.SequenceMatcher(None, sender, best).ratio()
-        if ratio >= 0.8:
+        if hidden:
+            score += 0.5
+            reasons.append("sender %s starts with %s but belongs to someone else" % (sender, hidden))
+        elif ratio >= 0.8:
             score += 0.5
             reasons.append("sender %s looks like %s but is not it" % (sender, best))
     if any(u in text for u in URGENT):
@@ -120,6 +125,10 @@ def phishing(profile, inbox, threshold=0.7, borderline=0.4):
             verdict = "phishing"
         elif score >= borderline:
             verdict, model = models.classify(m["subject"] + "\n" + m["body"], default="suspicious")
+            if verdict not in ("phishing", "suspicious"):
+                # The model may raise concern, never clear a rule hit: the email itself could have told it
+                # to answer "safe". Borderline stays at least suspicious.
+                verdict, model = "suspicious", "rules (model said %s; rules still flag it)" % verdict
         if verdict in ("phishing", "suspicious"):
             out.append(_threat(
                 verdict, "%s:%s" % (verdict, m["id"]), "high" if verdict == "phishing" else "medium",
@@ -185,7 +194,8 @@ def scam_calls(profile, calls, senior=None):
             verdict = "scam_call"
         elif score >= borderline:
             label, model = models.classify(c.get("transcript", ""), default="suspicious")
-            verdict = {"phishing": "scam_call", "suspicious": "suspicious"}.get(label)
+            # As with email: a "safe" answer cannot clear a borderline call (the transcript is attacker text).
+            verdict = "scam_call" if label == "phishing" else "suspicious"
         if verdict == "scam_call":
             out.append(_threat(
                 "scam_call", "scam:%s" % c["id"], "high",

@@ -6,14 +6,15 @@ warning cannot wait for a model call. The scoring is detect.call_score, the same
 `python3 agent/live.py` replays data/live_call.json and writes web/live.html, a phone-shaped page
 whose Dynamic Island shows "Guardian is listening" and turns into a warning when the score crosses.
 """
-import html
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent import detect
+from agent.audit import AuditLog
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -156,18 +157,31 @@ def page(call, rows, result):
     return PAGE % blob
 
 
-def build(data_dir=None, out=None):
+def build(data_dir=None, out=None, run_dir=None):
+    """Score the replay, record it in the audit trail like every other step, and write the page."""
     scenario = detect.load("live_call.json", data_dir)
     profile = detect.load("profile.json", data_dir)
-    rows = score_stream(scenario["call"], scenario["turns"], profile.get("phone_contacts", []),
+    call = scenario["call"]
+    rows = score_stream(call, scenario["turns"], profile.get("phone_contacts", []),
                         senior=profile.get("protection") == "senior")
+    result = outcome(call, profile)
+    subject = "live:" + call["id"]
+    log = AuditLog(run_dir or os.path.join(ROOT, "runs"), "live-" + time.strftime("%Y%m%d-%H%M%S"))
+    log.event("listen", "live_listening", {"call": call["id"]}, {"turns": len(rows)}, subject)
+    for r in rows:
+        if r["alert"]:
+            log.event("warn", "live_warning", {"call": call["id"], "t": r["t"]},
+                      {"score": r["score"], "headline": r["headline"], "reasons": r["reasons"]}, subject)
+    log.event("act", "live_outcome", {"call": call["id"]}, result, subject)
     out = out or os.path.join(ROOT, "web", "live.html")
     with open(out, "w") as f:
-        f.write(page(scenario["call"], rows, outcome(scenario["call"], profile)))
+        f.write(page(call, rows, result))
     return rows, out
 
 
 if __name__ == "__main__":
+    from agent.run import load_env
+    load_env()
     rows, out = build()
     for r in rows:
         mark = "  <-- WARNING: " + r["headline"] if r["alert"] else ""

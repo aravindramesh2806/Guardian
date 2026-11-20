@@ -23,6 +23,7 @@ Senior protection mode lowers the bar for calls, because older adults are target
 Python 3.9+ and the standard library only. No installs.
 
 ```bash
+python3 agent/demo.py      # before a demo: reset the store, run, build both pages
 npm install               # Statsig web SDK (only needed to refresh web/vendor/statsig.min.js)
 python3 agent/run.py      # detect, decide, act, record
 python3 agent/brief.py    # daily brief + web/report.html

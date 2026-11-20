@@ -43,7 +43,7 @@ def handle(threat, ctx):
             outcomes.append({"action": action["type"], "status": "already done in " + done["run_id"]})
             log.event("check_history", "check_history", {"action": action["key"]}, done, threat["key"])
             continue
-        allowed, reason = respond.guard(action, ctx["gates"], ctx["verification"], ctx["profile"])
+        allowed, reason = respond.guard(action, ctx["gates"], ctx["verification"], ctx["profile"], now)
         log.event("guard", "guard_" + action["type"], {"action": action["key"]},
                   {"allowed": allowed, "reason": reason}, threat["key"])
         if allowed:

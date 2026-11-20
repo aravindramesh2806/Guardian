@@ -48,7 +48,7 @@ test("a passed claim writes passed in the shape the agent reads", async () => {
   const file = read(outFile);
   assert.strictEqual(file.result, "passed");
   assert.strictEqual(file.claim_type, "live_human_presence");
-  assert.match(file.checked_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
+  assert.match(file.checked_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
   assert.ok(file.source);
   const claim = persona.calls.find((c) => c[0] === "claim")[1];
   assert.deepStrictEqual(claim, { privacyPassToken: "PASS", relayToken: "TOKEN", relaySecret: "SECRET" });

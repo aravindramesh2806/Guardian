@@ -5,6 +5,7 @@ Actions are simulated into the outbox folder. Swapping a simulated action for a 
 """
 import json
 import os
+from datetime import datetime, timedelta
 
 from agent import models
 
@@ -62,8 +63,26 @@ def decide(threat, profile):
     return [{"type": "alert", "key": "alert:" + threat["key"]}]
 
 
-def guard(action, gates, verification, profile):
-    """May this action run now? Returns (allowed, reason)."""
+CLAIM_MAX_AGE = timedelta(hours=24)
+
+
+def _parse_time(ts):
+    """ISO time, naive or with an offset ("Z" too), as naive local time."""
+    d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
+
+
+def claim_fresh(verification, now):
+    """A Persona pass counts for 24 hours. Missing, unreadable or future times do not count."""
+    try:
+        age = _parse_time(now) - _parse_time(verification["checked_at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return timedelta(minutes=-5) <= age <= CLAIM_MAX_AGE
+
+
+def guard(action, gates, verification, profile, now=None):
+    """May this action run now? Returns (allowed, reason). `now` turns on the Persona freshness check."""
     if action["type"] == "alert":
         return True, "alerts always go to you"
     if gates.get("kill_switch"):
@@ -81,6 +100,8 @@ def guard(action, gates, verification, profile):
     if action["type"] == "lock_card":
         if verification.get("result") != "passed":
             return False, "no verified person behind this agent yet (Persona check not passed)"
+        if now is not None and not claim_fresh(verification, now):
+            return False, "the Persona check is more than 24 hours old; verify again"
         if not gates.get("auto_lock_card"):
             return False, "auto-lock is off"
         c = card(profile, action["card"])

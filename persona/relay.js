@@ -37,7 +37,7 @@ function writeVerification(file, result, source, now = new Date()) {
     _note: "Written by persona/relay.js from a Persona Relay claim. Persona returns only passed or failed.",
     claim_type: CLAIM_TYPE,
     result,
-    checked_at: now.toISOString().slice(0, 19),
+    checked_at: now.toISOString().replace(/\.\d+Z$/, "Z"), // UTC with "Z": the agent converts to local time
     source,
   };
   const tmp = file + ".tmp";
