@@ -240,10 +240,15 @@ function render() {
   act(checkNow, () => call("/api/check-now", {}));
 
   const needs = f.needs_you.map((n) => {
-    const yes = el("button", {}, "Yes, do it");
+    const yes = el("button", {}, n.stuck ? "It didn't happen, try again" : "Yes, do it");
     act(yes, () => call("/api/approve", { key: n.key }));
+    let happened = null;
+    if (n.stuck) {
+      happened = el("button", { class: "secondary" }, "It already happened");
+      act(happened, () => call("/api/already-done", { key: n.key }));
+    }
     return el("div", { class: "card" }, el("span", { class: "tag medium" }, "Needs you"), el("h3", {}, n.ask),
-      el("p", { class: "muted small" }, "You'll confirm with Face ID or fingerprint."), yes);
+      el("p", { class: "muted small" }, "You'll confirm with Face ID or fingerprint."), yes, happened);
   });
   const open = f.items.filter((i) => !i.marked_real), done = f.items.filter((i) => i.marked_real);
 
