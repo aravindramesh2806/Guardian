@@ -63,6 +63,11 @@ def decide(threat, profile):
             acts.append({"type": "notify_trusted", "key": "notify:%s:%s" % (c["address"], threat["key"]),
                          "contact": c})
         return acts
+    if threat["kind"] == "card_misuse" and ev.get("small"):
+        # A small unknown charge is more often parking than fraud: ask before locking, no dispute.
+        return [{"type": "lock_card", "key": "lock:" + ev["card"], "card": ev["card"], "ask_first": True,
+                 "merchant": ev["merchant"], "amount": ev["amount"]},
+                {"type": "alert", "key": "alert:" + threat["key"]}]
     if threat["kind"] in ("merchant_breach", "card_misuse"):
         acts = [{"type": "lock_card", "key": "lock:" + ev["card"], "card": ev["card"]}]
         if threat["kind"] == "card_misuse":
@@ -107,6 +112,8 @@ def guard(action, gates, verification, profile, now=None):
             return False, "family alerts are off"
         return True, "%s agreed to be told about serious scams" % action["contact"]["name"]
     if action["type"] == "lock_card":
+        if action.get("ask_first"):
+            return False, "a small charge you may have made: Guardian asks before locking your card"
         if verification.get("result") != "passed":
             return False, "no verified person behind this agent yet (Persona check not passed)"
         if now is not None and not claim_fresh(verification, now):
@@ -193,4 +200,8 @@ def held(action, threat, profile, reason):
         return {"status": "waiting for you", "reason": reason,
                 "ask": "Dispute $%.2f at %s on card ending %s?" % (
                     action["amount"], action["merchant"], card(profile, action["card"])["last4"])}
+    if action["type"] == "lock_card" and action.get("ask_first"):
+        return {"status": "waiting for you", "reason": reason,
+                "ask": "Lock card ending %s? You may not recognise $%.2f at %s." % (
+                    card(profile, action["card"])["last4"], action["amount"], action["merchant"])}
     return {"status": "waiting for you", "reason": reason}

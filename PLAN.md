@@ -192,6 +192,26 @@ follow when the call and text filters are needed.
 7. **Enrollment dry run:** a scripted walk-through timed to under 5 minutes, then a usability test with
    3 to 5 people, including someone over 65.
 
+### Results on 2026-11-20 (`python3 agent/evaluate.py`, `--holdout`)
+
+| Set | Person | Threats flagged | Auto actions on legit | Alerts a day | Repeats |
+|---|---|---|---|---|---|
+| Baseline, before fixes | Rose / Jordan | 76% / 70% | **1 / 1** (card locked over a $4.50 parking charge) | 0.97 / 0.77 | 0 |
+| Dev set, after fixes | Rose / Jordan | 100% / 100% | 0 / 0 | 1.10 / 1.03 | 0 |
+| **Held-out set** (never tuned on) | Rose / Jordan | **44% / 20%** | 0 / 0 | 0.37 / 0.17 | 0 |
+
+What it means:
+- **Safe:** across both sets and both people, nothing legitimate was acted on, and nothing was repeated.
+  A small unrecognised charge (under $50) now asks before locking the card.
+- **Not yet good enough at new scams:** the 100% on the dev set is the rules learning those cases. On
+  scams phrased differently (benefits-card, "reply with the code", "press 1 for a refund", mailbox-full,
+  prize and lottery fees), keyword rules catch 20 to 44%.
+- **Next for recall:** a language model on every message from an unknown sender (SIE, raise-only, as L1
+  requires), measured on the held-out set and a fresh set written by someone who has not read the rules.
+  Real recall is only known from shadow mode on real mail.
+- Known noise still in the dev set: a grandson's "I got you a gift card" call (a senior-mode alert), and
+  parking or cafe charges with no receipt (an ask, not a lock).
+
 ### Then: testing on yourself
 - **Shadow mode for 1 to 2 weeks** on your real Gmail: read-only, no actions, nothing sent to anyone
   else. Each day you mark the brief's items right or wrong.

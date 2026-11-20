@@ -25,12 +25,22 @@ def load(name, data_dir=None):
 
 
 def domain_of(address_or_url):
-    """The host part of an email address or URL, lowercased."""
-    s = address_or_url.lower()
+    """The host part of an email address or URL, lowercased. Handles "Name <addr@host>" senders."""
+    s = address_or_url.lower().strip()
+    bracket = re.search(r"<([^>]*)>", s)
+    if bracket:
+        s = bracket.group(1).strip()
     if "@" in s and "//" not in s:
-        return s.split("@", 1)[1]
+        return s.rsplit("@", 1)[1].strip(" >")
     s = re.sub(r"^[a-z]+://", "", s)
-    return s.split("/", 1)[0]
+    host = s.split("/", 1)[0].split("?", 1)[0]
+    # http://examplebank.example@evil.test/ goes to evil.test: everything before "@" is a username.
+    return host.rsplit("@", 1)[-1].split(":", 1)[0]
+
+
+def same_site(a, b):
+    """One site and its own subdomains count as the same place: mail.shop.example and shop.example."""
+    return bool(a and b) and (a == b or a.endswith("." + b) or b.endswith("." + a))
 
 
 def _threat(kind, key, severity, summary, evidence):
@@ -100,17 +110,31 @@ def phishing_score(message, known_domains):
         elif ratio >= 0.8:
             score += 0.5
             reasons.append("sender %s looks like %s but is not it" % (sender, best))
+    if "xn--" in sender:
+        score += 0.3
+        reasons.append("sender %s uses an encoded international name that can imitate another" % sender)
     if any(u in text for u in URGENT):
         score += 0.2
         reasons.append("pressure to act fast")
     foreign = [domain_of(l) for l in message.get("links", [])
-               if domain_of(l) != sender and domain_of(l) not in known_domains]
+               if not same_site(domain_of(l), sender) and not any(same_site(domain_of(l), d) for d in known_domains)]
     if foreign:
         score += 0.3
         reasons.append("link goes to %s" % foreign[0])
     if any(c in text for c in CREDENTIAL_ASK):
         score += 0.1
         reasons.append("asks you to log in or verify")
+    # The same scam language the call rules look for: it arrives by email too.
+    asks = [p for p in PAYMENT_ASK if p in text]
+    if asks:
+        score += 0.3
+        reasons.append("asks for gift cards, crypto or transfers (%s)" % ", ".join(asks[:2]))
+    if any(s in text for s in SECRECY):
+        score += 0.2
+        reasons.append("asks you to keep it secret")
+    if sender not in known_domains and "pay" in text and any(w in text for w in PAYMENT_DEMAND):
+        score += 0.3
+        reasons.append("demands payment, and you have no account with %s" % sender)
     return min(round(score, 2), 1.0), reasons
 
 
@@ -143,10 +167,18 @@ PAYMENT_ASK = ("gift card", "wire", "bitcoin", "crypto", "safe account", "bail",
 SECRECY = ("don't tell", "do not tell", "keep this between us", "don't call")
 PRESSURE = ("right now", "today", "immediately", "in trouble", "arrest", "compromised", "suspended", "held")
 FAMILY_OPENERS = ("grandma, it's me", "grandpa, it's me", "mom, it's me", "dad, it's me", "it's me")
+PAYMENT_DEMAND = ("invoice", "overdue", "late fee", "unpaid", "outstanding balance")
+REMOTE_ACCESS = ("remote access", "remote control", "anydesk", "teamviewer", "control of your computer")
+LEGAL_THREAT = ("warrant", "arrest", "police will", "officers will", "deport", "lawsuit against you")
+INVESTMENT_PITCH = ("invest", "doubled my", "guaranteed return", "trading strategy", "returns of")
 
 
-def call_score(call, contacts):
-    """Score 0-1 for a call, voicemail or text, with the reasons behind it."""
+def call_score(call, contacts, known_domains=()):
+    """Score 0-1 for a call, voicemail or text, with the reasons behind it.
+
+    `known_domains` are the person's own accounts: a text linking there (a real delivery or bank text) is
+    not counted as a link to a stranger's site.
+    """
     text = call.get("transcript", "").lower()
     by_name = {c["name"].lower(): c["number"] for c in contacts}
     known_numbers = set(by_name.values())
@@ -168,12 +200,24 @@ def call_score(call, contacts):
     if any(p in text for p in PRESSURE):
         score += 0.1
         reasons.append("pressure to act fast")
-    if call.get("links") and call["from"] not in known_numbers:
+    unknown = call["from"] not in known_numbers
+    stranger_links = [domain_of(l) for l in call.get("links") or []
+                      if not any(same_site(domain_of(l), d) for d in known_domains)]
+    if stranger_links and unknown:
         score += 0.3
-        reasons.append("text from an unknown number with a link to %s" % domain_of(call["links"][0]))
+        reasons.append("text from an unknown number with a link to %s" % stranger_links[0])
         if "pay" in text:
             score += 0.3
             reasons.append("asks you to pay through a link")
+    if unknown and any(r in text for r in REMOTE_ACCESS):
+        score += 0.5
+        reasons.append("an unknown caller wants remote access to your device")
+    if unknown and any(t in text for t in LEGAL_THREAT):
+        score += 0.2
+        reasons.append("threatens arrest or legal action")
+    if unknown and any(i in text for i in INVESTMENT_PITCH):
+        score += 0.2
+        reasons.append("an investment pitch from a number you don't know")
     return min(round(score, 2), 1.0), reasons
 
 
@@ -187,8 +231,9 @@ def scam_calls(profile, calls, senior=None):
         senior = profile.get("protection") == "senior"
     threshold, borderline = (0.5, 0.3) if senior else (0.6, 0.4)
     contacts = profile.get("phone_contacts", [])
+    known = [a["domain"] for a in profile.get("accounts", [])]
     for c in calls:
-        score, reasons = call_score(c, contacts)
+        score, reasons = call_score(c, contacts, known)
         verdict, model = None, "rules"
         if score >= threshold:
             verdict = "scam_call"
@@ -219,13 +264,21 @@ def card_misuse(profile, transactions, receipts):
     for t in transactions:
         if t["merchant"].lower() in usual or (t["merchant"].lower(), round(t["amount"], 2)) in matched:
             continue
+        small = t["amount"] < SMALL_CHARGE
         out.append(_threat(
-            "card_misuse", "charge:%s" % t["id"], "high",
-            "Unrecognised charge of $%.2f at %s on card ending %s" % (
+            "card_misuse", "charge:%s" % t["id"], "medium" if small else "high",
+            ("Did you make this $%.2f charge at %s on card ending %s?" if small
+             else "Unrecognised charge of $%.2f at %s on card ending %s") % (
                 t["amount"], t["merchant"], t["card"].split("-")[-1]),
             {"transaction": t["id"], "card": t["card"], "merchant": t["merchant"], "amount": t["amount"],
-             "date": t["date"], "why": "no receipt matches it and you have not used this merchant before"}))
+             "date": t["date"], "small": small,
+             "why": "no receipt matches it and you have not used this merchant before"}))
     return out
+
+
+# Below this, an unrecognised charge is usually parking, a cafe or a toll: Guardian asks before locking the card
+# instead of locking it, because a wrong lock strands the person. Above it, the lock goes ahead.
+SMALL_CHARGE = 50.0
 
 
 def _source(name, service, sources, remote, local):
