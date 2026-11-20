@@ -58,7 +58,7 @@ family alerts, disputes). Replacing one with a real integration changes only its
 | Superlinked SIE | Borderline phishing and call checks; alert drafting with a fact guard | Live when `SIE_*` is set; rules and templates otherwise. Endpoint shape not yet verified |
 | Persona Relay | `live_human_presence` check before Guardian may lock a card | Local stand-in in `data/verification.json`; live needs the Node sidecar (to do) |
 | Statsig (web) | Report page: session replay, auto-capture analytics, `guardian_report_viewed` and `guardian_threat_opened` events | **Live and verified** with `STATSIG_CLIENT_KEY` (initialize 200, events 202) |
-| Statsig (gates) | `senior_protection`, auto-block, auto-quarantine, auto-lock, disputes, family alerts, kill switch; every gate's value and source goes into each Amplitude event | Live when `STATSIG_SERVER_SECRET` is set (`agent/flags.py`, HTTP API, not yet verified); `data/gates.json` otherwise |
+| Statsig (gates) | `senior_protection`, auto-block, auto-quarantine, auto-lock, disputes, family alerts, kill switch; every gate's value and source goes into each Amplitude event | **Live and verified** when `STATSIG_SERVER_SECRET` is set (`agent/flags.py`, all 7 gates read as `statsig`); `data/gates.json` otherwise |
 
 Roadmap: Airbyte (live Gmail, phone and card sync), Parakeet on SIE (voicemail transcription),
 cognee (what is normal for this person), Personal Agent Protocol (reaching banks and stores directly).
