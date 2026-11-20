@@ -188,6 +188,17 @@ class BriefTests(Base):
         page = open(brief.report(self.run_once(), os.path.join(self.tmp, "runs"), out, client_key="")).read()
         self.assertIn("To Sam (daughter)", page)
 
+    def test_report_trail_is_plain_language(self):
+        s = self.run_once()
+        with open(brief.report(s, os.path.join(self.tmp, "runs"), os.path.join(self.tmp, "r.html"), client_key="")) as f:
+            page = f.read()
+        self.assertIn("Example Bank&#x27;s real number is +1-555-0199</li>", page)  # a full reason, not cut off
+        self.assertIn("gate auto_block_numbers on (local)", page)
+        self.assertIn("Persona live_human_presence: passed", page)
+        self.assertIn("Tell family: Sam (daughter) agreed to be told about serious scams", page)
+        self.assertIn("File a dispute: disputes wait for your confirmation", page)
+        self.assertIn("Raw events (7)", page)
+
     def test_audit_trail_covers_every_threat(self):
         s = self.run_once()
         with open(os.path.join(self.tmp, "runs", s["run_id"] + ".jsonl")) as f:
