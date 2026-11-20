@@ -1,0 +1,9 @@
+{
+  "_note": "Stand-in for Statsig gates. Alerts always go out; the kill switch stops every other action.",
+  "auto_quarantine": true,
+  "auto_lock_card": true,
+  "dispute_needs_approval": true,
+  "kill_switch": false,
+  "auto_block_numbers": true,
+  "notify_trusted_contacts": true
+}

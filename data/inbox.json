@@ -1,0 +1,50 @@
+[
+  {
+    "id": "m-101",
+    "from": "support@paylinc.example",
+    "received": "2026-11-20T07:12:00",
+    "subject": "Your refund of $249.00 is on hold - verify within 24 hours",
+    "body": "We could not process your refund. Log in and verify your account within 24 hours or it will be suspended.",
+    "links": [
+      "http://paylinc-verify.example/login"
+    ]
+  },
+  {
+    "id": "m-102",
+    "from": "no-reply@examplebank.example",
+    "received": "2026-11-20T06:40:00",
+    "subject": "Password reset requested",
+    "body": "Someone asked to reset the password for your online banking. If this was not you, secure your account.",
+    "links": [
+      "https://examplebank.example/security"
+    ]
+  },
+  {
+    "id": "m-103",
+    "from": "account@streambox.example",
+    "received": "2026-11-20T08:56:00",
+    "subject": "Reset your password",
+    "body": "Use this link to reset your StreamBox password.",
+    "links": [
+      "https://streambox.example/reset"
+    ]
+  },
+  {
+    "id": "m-104",
+    "from": "orders@shopnest.example",
+    "received": "2026-11-19T15:02:00",
+    "subject": "Your order SN-55120 has shipped",
+    "body": "Your order is on its way. Track it from your account.",
+    "links": [
+      "https://shopnest.example/orders/SN-55120"
+    ]
+  },
+  {
+    "id": "m-105",
+    "from": "jordan@friends.example",
+    "received": "2026-11-19T19:30:00",
+    "subject": "Dinner on Saturday?",
+    "body": "Are we still on for Saturday at 7?",
+    "links": []
+  }
+]

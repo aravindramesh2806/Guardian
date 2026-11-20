@@ -1,0 +1,37 @@
+[
+  {
+    "id": "tx-1",
+    "card": "card-visa-4821",
+    "merchant": "Green Grocer",
+    "amount": 42.1,
+    "date": "2026-11-18"
+  },
+  {
+    "id": "tx-2",
+    "card": "card-visa-4821",
+    "merchant": "ShopNest",
+    "amount": 129.99,
+    "date": "2026-11-12"
+  },
+  {
+    "id": "tx-3",
+    "card": "card-visa-4821",
+    "merchant": "StreamBox",
+    "amount": 15.99,
+    "date": "2026-11-15"
+  },
+  {
+    "id": "tx-4",
+    "card": "card-visa-4821",
+    "merchant": "QX DIGITAL SVCS",
+    "amount": 389.0,
+    "date": "2026-11-20"
+  },
+  {
+    "id": "tx-5",
+    "card": "card-mc-0937",
+    "merchant": "City Transit",
+    "amount": 2.75,
+    "date": "2026-11-19"
+  }
+]

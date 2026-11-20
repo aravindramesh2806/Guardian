@@ -1,0 +1,7 @@
+{
+  "_note": "Stand-in for a Persona Relay claim result. Persona returns only passed or failed.",
+  "claim_type": "live_human_presence",
+  "result": "passed",
+  "checked_at": "2026-11-20T08:00:00",
+  "source": "Persona Relay sandbox (stand-in)"
+}

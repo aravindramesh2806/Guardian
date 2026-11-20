@@ -1,0 +1,45 @@
+[
+  {
+    "id": "c-201",
+    "kind": "voicemail",
+    "from": "+1-555-0100",
+    "caller_id": "Example Bank",
+    "at": "2026-11-20T09:05:00",
+    "transcript": "This is the Example Bank fraud department. Your account has been compromised. You need to move your money to a safe account today and read me the code we just texted you. Do not tell anyone at the branch."
+  },
+  {
+    "id": "c-202",
+    "kind": "voicemail",
+    "from": "+1-555-0123",
+    "caller_id": "Unknown",
+    "at": "2026-11-20T10:20:00",
+    "transcript": "Grandma, it's me. I'm in trouble and I need bail money right now. Please don't tell mom. Can you buy gift cards and read me the numbers?"
+  },
+  {
+    "id": "c-203",
+    "kind": "sms",
+    "from": "+1-555-0188",
+    "caller_id": "Unknown",
+    "at": "2026-11-20T11:02:00",
+    "transcript": "Parcel Post: your package is held. Pay the $1.99 redelivery fee at http://parcel-redeliver.example/pay",
+    "links": [
+      "http://parcel-redeliver.example/pay"
+    ]
+  },
+  {
+    "id": "c-204",
+    "kind": "voicemail",
+    "from": "+1-555-0150",
+    "caller_id": "Green Pharmacy",
+    "at": "2026-11-20T12:15:00",
+    "transcript": "Hi Rose, your prescription is ready for pickup at Green Pharmacy."
+  },
+  {
+    "id": "c-205",
+    "kind": "call",
+    "from": "+1-555-0177",
+    "caller_id": "Alex (grandson)",
+    "at": "2026-11-20T13:00:00",
+    "transcript": "Hi Grandma, just calling to say hi. See you on Sunday."
+  }
+]
