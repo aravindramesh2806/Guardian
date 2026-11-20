@@ -80,7 +80,7 @@ class Failures(Base):
         audit.AMPLITUDE_URL = "http://127.0.0.1:9/2/httpapi"  # nothing listens on the discard port
         self.addCleanup(setattr, audit, "AMPLITUDE_URL", original)
         s = self.run_once()
-        self.assertEqual(s["threats"], 8)
+        self.assertEqual(s["threats"], 9)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "runs", s["run_id"] + ".jsonl.errors")))
 
     def test_model_down_falls_back_to_rules(self):
@@ -117,8 +117,12 @@ class SecondLook(Base):
         r = self.by_key(s)["suspicious:u-1"]
         self.assertEqual([a["action"] for a in r["actions"]], ["alert"])
         self.assertIn("language model", r["evidence"]["reasons"][0])
-        # Even calling every unknown sender a scam, nothing new was quarantined, blocked or locked.
-        self.assertEqual(s["stopped"], 5)
+        # Even calling every unknown sender a scam, the second look quarantined, blocked or locked nothing.
+        # The one extra block is the borderline gift-card voicemail (c-206): the rules flagged it and a model
+        # answer may raise a rule hit (never clear it), as documented in detect.scam_calls.
+        self.assertEqual(s["stopped"], 6)
+        self.assertEqual(self.status(self.by_key(s)["scam:c-206"], "block_number"),
+                         "number +1-555-0999 blocked (simulated)")
         self.assertTrue(asked)
 
     def test_known_senders_and_rule_hits_are_not_sent_to_the_model(self):

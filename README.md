@@ -29,6 +29,7 @@ python3 agent/run.py      # detect, decide, act, record
 python3 agent/brief.py    # daily brief + web/report.html
 python3 agent/live.py     # replay a live scam call + web/live.html (Dynamic Island warning)
 (cd persona && npm install && npm test)   # Persona Relay sidecar; `node persona/server.js` with PERSONA_API_KEY set
+python3 agent/run.py --approve dispute:tx-4   # say yes to one held action, then run
 python3 -m unittest discover -s tests -t .
 python3 agent/evaluate.py [--holdout]   # 30-day synthetic quality bar (PLAN.md section 6)
 ```
@@ -36,7 +37,11 @@ python3 agent/evaluate.py [--holdout]   # 30-day synthetic quality bar (PLAN.md 
 Open the report over http, so the Statsig web SDK works: `python3 -m http.server 8000 -d web`, then
 <http://localhost:8000/report.html>. `web/report.html` is generated and not committed.
 
-Run `agent/run.py` twice: the second run repeats nothing. Delete `runs/` and `outbox/` to start fresh.
+Run `agent/run.py` twice: the second run repeats nothing. Held actions (the dispute) wait until the person
+approves that one action with `--approve` (or **Needs you** in the app); approvals live in the store, beside the
+threats and actions. The report shows each
+message Guardian sent (to the person and to family) and the command to approve anything waiting.
+Delete `runs/` and `outbox/` to start fresh.
 
 ## The app (set up once)
 

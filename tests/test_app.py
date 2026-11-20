@@ -44,7 +44,7 @@ class Core(unittest.TestCase):
         uid = new_user()
         f = core.feed(uid)
         self.assertEqual(f["data_source"], "sample")
-        self.assertEqual(len(f["items"]), 8)
+        self.assertEqual(len(f["items"]), 9)
         lock = next(i for i in f["items"] if "389.00" in i["summary"])
         self.assertTrue(any("Persona" in w for w in lock["waiting"]))
         self.assertEqual(json.load(open(os.path.join(USERS_TMP, uid, "data", "verification.json")))["result"], "not checked")

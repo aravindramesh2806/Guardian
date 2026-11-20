@@ -207,13 +207,16 @@ def act(action, threat, profile, outbox_dir):
             profile["name"].split(" ")[0], threat["summary"])
         if firedrill.configured("slack"):
             channel = firedrill.tell_family(msg, action["key"])
-            return {"status": "%s told in #%s (firedrill)" % (c["name"], channel), "text": msg}
+            return {"status": "%s told in #%s (firedrill)" % (c["name"], channel), "text": msg,
+                    "to": c["name"], "channel": "Slack #%s" % channel}
         path = _append(outbox_dir, "family_alerts.jsonl", {"to": c["name"], "channel": c["channel"], "text": msg})
-        return {"status": "%s told (simulated)" % c["name"], "file": path, "text": msg}
+        return {"status": "%s told (simulated)" % c["name"], "file": path, "text": msg,
+                "to": c["name"], "channel": c["channel"]}
     if action["type"] == "alert":
         text, drafted_by = alert_text(threat, profile)
         path = _append(outbox_dir, "alerts.jsonl", {"threat": threat["key"], "severity": threat["severity"], "text": text})
-        return {"status": "alert sent (simulated)", "file": path, "drafted_by": drafted_by, "text": text}
+        return {"status": "alert sent (simulated)", "file": path, "drafted_by": drafted_by, "text": text,
+                "to": profile["name"].split(" ")[0], "channel": "Guardian app"}
     raise ValueError("unknown action " + action["type"])
 
 

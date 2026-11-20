@@ -154,9 +154,15 @@ def threat_seen(store, key):
 
 def action_done(store, key):
     """An action that already ran. Held and failed actions are not 'done', so they run again later."""
-    found = store.rows("SELECT status, run_id FROM actions WHERE action_key = %s AND status <> %s AND status <> %s",
+    found = store.rows("SELECT status, run_id, detail FROM actions WHERE action_key = %s AND status <> %s AND status <> %s",
                        (key, "waiting for you", "failed, will retry"))
     return found[0] if found else None
+
+
+def waiting(store):
+    """Keys of actions held for the person, so --approve can check what it is approving."""
+    return [r["action_key"] for r in store.rows(
+        "SELECT action_key FROM actions WHERE status = %s", ("waiting for you",))]
 
 
 def save_threat(store, t, run_id, at):
