@@ -65,8 +65,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: persona/package-lock.json
       - name: Install app dependencies
         run: pip install -r app/requirements.txt
+      - name: Install the Persona sidecar's packages (the app serves the Relay widget from them)
+        run: npm ci
+        working-directory: persona
       - name: Install Playwright and Chromium
         run: |
           npm install --no-save --no-package-lock playwright@1.49.1
