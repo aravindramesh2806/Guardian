@@ -199,6 +199,8 @@ follow when the call and text filters are needed.
 | Baseline, before fixes | Rose / Jordan | 76% / 70% | **1 / 1** (card locked over a $4.50 parking charge) | 0.97 / 0.77 | 0 |
 | Dev set, after fixes | Rose / Jordan | 100% / 100% | 0 / 0 | 1.10 / 1.03 | 0 |
 | **Held-out set** (never tuned on) | Rose / Jordan | **44% / 20%** | 0 / 0 | 0.37 / 0.17 | 0 |
+| Dev set, rules + model second look (Superlinked `Qwen/Qwen3.5-4B`) | Rose / Jordan | 100% / 100% | 0 / 0 | 1.03 / 0.97 | 0 |
+| **Held-out set, rules + model** | Rose / Jordan | **100% / 100%** | 0 / 0 | 0.77 / 0.83 | 0 |
 
 What it means:
 - **Safe:** across both sets and both people, nothing legitimate was acted on, and nothing was repeated.
@@ -206,7 +208,7 @@ What it means:
 - **Not yet good enough at new scams:** the 100% on the dev set is the rules learning those cases. On
   scams phrased differently (benefits-card, "reply with the code", "press 1 for a refund", mailbox-full,
   prize and lottery fees), keyword rules catch 20 to 44%.
-- **Built, waiting for a key:** the model's second look (`detect.second_look`). Measure it with `python3 agent/evaluate.py --holdout --model`.
+- **Model second look, measured:** with Superlinked's `Qwen/Qwen3.5-4B` (about 0.5 s a message), held-out recall goes from 44% / 20% to 100% / 100%, still with zero actions on legitimate items. Cost: unneeded alerts on the dev set rise from 6 / 4 to 10 / 8 (it also flags the real delivery text and a "final notice" sale). Caveat: the held-out scams were written by the same author as the rules; a set written by someone else, and shadow mode on real mail, are the real test.
 - **Next for recall:** a language model on every message from an unknown sender (SIE, raise-only, as L1
   requires), measured on the held-out set and a fresh set written by someone who has not read the rules.
   Real recall is only known from shadow mode on real mail.
