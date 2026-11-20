@@ -181,9 +181,15 @@ class FlagTests(Base):
         self.assertEqual(snap["kill_switch"], {"value": False, "source": "local"})
 
     def test_statsig_answer_wins_and_is_labelled(self):
-        snap = flags.snapshot({}, {}, check=lambda gate, user: gate == "kill_switch")
+        snap = flags.snapshot({}, {}, check=lambda gate, user: {"value": gate == "kill_switch", "rule_id": "r1"})
         self.assertEqual(snap["kill_switch"], {"value": True, "source": "statsig"})
         self.assertEqual(snap["senior_protection"]["source"], "statsig")
+
+    def test_gate_not_set_up_in_statsig_keeps_the_safe_local_value(self):
+        snap = flags.snapshot({"dispute_needs_approval": True, "auto_block_numbers": True}, {},
+                              check=lambda gate, user: {"value": False, "rule_id": None})
+        self.assertEqual(snap["dispute_needs_approval"], {"value": True, "source": "local (not in Statsig)"})
+        self.assertTrue(snap["auto_block_numbers"]["value"])
 
     def test_statsig_failure_falls_back_to_local(self):
         def broken(gate, user):
@@ -204,8 +210,8 @@ class FlagTests(Base):
         self.store = st.LocalStore(os.path.join(self.tmp, "t2.sqlite3"))
         off = runner.run(data_dir=self.data, run_dir=os.path.join(self.tmp, "runs2"),
                          outbox_dir=os.path.join(self.tmp, "outbox2"), store=self.store,
-                         gate_check=lambda gate, user: gate != "senior_protection" and gate not in
-                         ("kill_switch", "dispute_needs_approval"))
+                         gate_check=lambda gate, user: {"value": gate not in (
+                             "senior_protection", "kill_switch", "dispute_needs_approval"), "rule_id": "r1"})
         self.assertIn("suspicious:c-299", self.by_key(on))
         self.assertNotIn("suspicious:c-299", self.by_key(off))
         self.assertEqual(off["gates"]["senior_protection"], {"value": False, "source": "statsig"})

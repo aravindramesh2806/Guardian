@@ -18,7 +18,11 @@ GATES = ("senior_protection", "auto_quarantine", "auto_block_numbers", "auto_loc
 
 
 def _statsig(gate, user_id, secret):
-    """One live gate check. Returns True/False. Raises on any failure."""
+    """One live gate check. Returns Statsig's answer: {"value": bool, "rule_id": str or None}.
+
+    Raises on any failure. A rule_id of None means the gate is not set up in Statsig (Statsig answers a
+    gate that does not exist exactly like one that is off), so the caller must not trust its value.
+    """
     body = json.dumps({"user": {"userID": user_id}, "gateName": gate}).encode()
     req = urllib.request.Request(STATSIG_CHECK_GATE, data=body, headers={
         "Content-Type": "application/json", "statsig-api-key": secret})
@@ -26,7 +30,7 @@ def _statsig(gate, user_id, secret):
         out = json.loads(resp.read())
     if not isinstance(out.get("value"), bool):
         raise ValueError("unexpected Statsig response")
-    return out["value"]
+    return {"value": out["value"], "rule_id": out.get("rule_id")}
 
 
 def local_default(gate, local_gates, profile):
@@ -50,7 +54,13 @@ def snapshot(local_gates, profile, user_id="demo-user", check=None):
             out[gate] = {"value": fallback, "source": "local"}
             continue
         try:
-            out[gate] = {"value": live(gate, user_id), "source": "statsig"}
+            answer = live(gate, user_id)
+            if answer.get("rule_id") is None:
+                # 2026-11-20: a gate nobody created comes back "off"; trusting that would switch off
+                # protections and let disputes file without approval. Keep the safe local setting.
+                out[gate] = {"value": fallback, "source": "local (not in Statsig)"}
+            else:
+                out[gate] = {"value": answer["value"], "source": "statsig"}
         except Exception as e:  # a failed gate check must never stop protection
             out[gate] = {"value": fallback, "source": "local (statsig error: %s)" % type(e).__name__}
     return out
