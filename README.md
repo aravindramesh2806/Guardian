@@ -26,13 +26,17 @@ Python 3.9+ and the standard library only. No installs.
 npm install               # Statsig web SDK (only needed to refresh web/vendor/statsig.min.js)
 python3 agent/run.py      # detect, decide, act, record
 python3 agent/brief.py    # daily brief + web/report.html
+python3 agent/run.py --approve dispute:tx-4   # say yes to one held action, then run
 python3 -m unittest discover -s tests -t .
 ```
 
 Open the report over http, so the Statsig web SDK works: `python3 -m http.server 8000 -d web`, then
 <http://localhost:8000/report.html>. `web/report.html` is generated and not committed.
 
-Run `agent/run.py` twice: the second run repeats nothing. Delete `runs/` and `outbox/` to start fresh.
+Run `agent/run.py` twice: the second run repeats nothing. Held actions (the dispute) wait until the person
+approves that one action with `--approve`; approvals live in `runs/approvals.json`. The report shows each
+message Guardian sent (to the person and to family) and the command to approve anything waiting.
+Delete `runs/` and `outbox/` to start fresh.
 
 ## How it works
 

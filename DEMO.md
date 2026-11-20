@@ -11,7 +11,7 @@ text and email, and the agents people use today help them shop and schedule, not
 
 "Meet Rose, 78. Her daughter Sam worries about her. Guardian is Rose's personal security agent."
 
-## 0:30 – 1:30 One morning, eight threats
+## 0:30 – 1:30 One morning, nine threats
 Show the brief at the top of the report:
 - A voicemail that shows "Example Bank" but comes from the wrong number, asking her to move money to a
   "safe account" and read out a code. **Blocked. Rose warned. Sam told.**
@@ -21,6 +21,9 @@ Show the brief at the top of the report:
 - A lookalike "PayLinc" refund email. **Quarantined.**
 - A bank password reset she didn't ask for, a forum leak with her email, a breach at a store she used.
   **Exact steps for each.**
+- A vague "call back about your gift card" voicemail. **Flagged as possibly a scam** (senior protection).
+
+Scroll to a scam voicemail: the cards show the exact message Rose got (with steps) and the text Sam got.
 
 ## 1:30 – 2:15 Why you can trust it
 Open one scam voicemail in the report and expand its audit trail:
@@ -31,11 +34,15 @@ Open one scam voicemail in the report and expand its audit trail:
 "Guardian locks cards only after Persona confirms a live human set it up. Disputes wait for Rose.
 A kill switch stops every action but still lets alerts through."
 
-## 2:15 – 2:45 It never nags twice
-Run `python3 agent/run.py` again live: 0 new threats, nothing repeated, the dispute still waiting.
+## 2:15 – 2:45 Rose says yes, and it never nags twice
+Point at the "Needs you" box on the $389 charge, then run live:
+`python3 agent/run.py --approve dispute:tx-4 && python3 agent/brief.py` and refresh the report.
+0 new threats, nothing repeated, and only that one dispute is filed: "Done for you since then:
+dispute filed." The gate that holds disputes stays on; Rose approved this one, and the audit trail says so.
 
 ## Optional beat: complete the loop (Amplitude + Statsig)
-Turn `senior_protection` off in Statsig, rerun: a borderline gift-card voicemail is no longer caught.
+Turn `senior_protection` off in Statsig, start fresh and rerun: the borderline gift-card voicemail
+(`c-206`) is no longer caught (8 threats instead of 9).
 Show both groups in Amplitude (every event carries the gate values), turn it back on.
 
 ## 2:45 – 3:00 Close

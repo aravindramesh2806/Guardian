@@ -27,6 +27,38 @@ def load_env(path=os.path.join(ROOT, ".env")):
                     os.environ.setdefault(key.strip(), value.strip())
 
 
+def load_approvals(run_dir):
+    """Action keys the person said yes to, mapped to when. Kept beside the runs, so a fresh start clears it."""
+    path = os.path.join(run_dir, "approvals.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def approve(key, run_dir=None, store=None, now=None):
+    """Say yes to one held action (for example dispute:tx-4). It runs on the next run, and only it."""
+    run_dir = run_dir or os.path.join(ROOT, "runs")
+    store = store or st.open_store(os.path.join(run_dir, "guardian.sqlite3"))
+    held = st.waiting(store)
+    if key not in held:
+        raise SystemExit("nothing waiting for you as %r; waiting: %s" % (key, ", ".join(held) or "nothing"))
+    approvals = load_approvals(run_dir)
+    approvals[key] = now or datetime.now().isoformat(timespec="seconds")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "approvals.json"), "w") as f:
+        json.dump(approvals, f, indent=2)
+    return approvals
+
+
+def message(result):
+    """The message an action sent, if it sent one: who it went to, how, and the text."""
+    if result.get("text") and result.get("to"):
+        return {"to": result["to"], "channel": result.get("channel", ""), "text": result["text"],
+                "drafted_by": result.get("drafted_by")}
+    return None
+
+
 def handle(threat, ctx):
     """Work one threat end to end. New threats are recorded; held actions are retried each run."""
     log, store, run_id, now = ctx["log"], ctx["store"], ctx["run_id"], ctx["now"]
@@ -40,10 +72,16 @@ def handle(threat, ctx):
     for action in respond.decide(threat, ctx["profile"]):
         done = st.action_done(store, action["key"])
         if done:
-            outcomes.append({"action": action["type"], "status": "already done in " + done["run_id"]})
+            try:
+                earlier = json.loads(done.get("detail") or "{}")
+            except ValueError:
+                earlier = {}
+            outcomes.append({"action": action["type"], "status": "already done in " + done["run_id"],
+                             "message": message(earlier)})
             log.event("check_history", "check_history", {"action": action["key"]}, done, threat["key"])
             continue
-        allowed, reason = respond.guard(action, ctx["gates"], ctx["verification"], ctx["profile"])
+        allowed, reason = respond.guard(action, ctx["gates"], ctx["verification"], ctx["profile"],
+                                        ctx["approvals"])
         log.event("guard", "guard_" + action["type"], {"action": action["key"]},
                   {"allowed": allowed, "reason": reason}, threat["key"])
         if allowed:
@@ -53,7 +91,8 @@ def handle(threat, ctx):
         log.event("act", "act_" + action["type"], {"action": action["key"]}, result, threat["key"])
         st.save_action(store, action, threat["key"], result, run_id, now)
         outcomes.append({"action": action["type"], "status": result["status"],
-                         "reason": result.get("reason", reason), "ask": result.get("ask")})
+                         "reason": result.get("reason", reason), "ask": result.get("ask"),
+                         "approve": result.get("approve"), "message": message(result)})
     return {"threat": threat["key"], "kind": threat["kind"], "severity": threat["severity"],
             "summary": threat["summary"], "evidence": threat["evidence"], "new": is_new, "actions": outcomes}
 
@@ -69,6 +108,7 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
         "outbox_dir": outbox_dir or os.path.join(ROOT, "outbox"),
         "profile": detect.load("profile.json", data_dir),
         "verification": detect.load("verification.json", data_dir),
+        "approvals": load_approvals(run_dir),
     }
     ctx["flags"] = flags.snapshot(detect.load("gates.json", data_dir), ctx["profile"], check=gate_check)
     ctx["gates"] = flags.values(ctx["flags"])
@@ -95,10 +135,19 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run Guardian once.")
+    parser.add_argument("--approve", metavar="ACTION", help="say yes to a held action first, e.g. dispute:tx-4")
+    args = parser.parse_args()
     load_env()
+    if args.approve:
+        approve(args.approve)
+        print("Approved %s. Running Guardian now." % args.approve)
     s = run()
     print(json.dumps({k: v for k, v in s.items() if k != "results"}, indent=2))
     for r in s["results"]:
         print("-", r["severity"], r["summary"])
         for a in r["actions"]:
             print("    ", a["action"], "->", a["status"], ("(" + a["reason"] + ")") if a["status"] == "waiting for you" else "")
+            if a.get("approve"):
+                print("        to approve: python3 agent/run.py --approve", a["approve"])

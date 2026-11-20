@@ -53,7 +53,8 @@ class DetectorTests(Base):
         keys = {t["key"] for t in detect.all_threats(self.data)}
         self.assertEqual(keys, {
             "scam:c-201", "scam:c-202", "scam:c-203", "charge:tx-4", "takeover:m-102",
-            "phishing:m-101", "merchant-breach:BR-1101", "breach:BR-1088:rose.demo@example.com"})
+            "phishing:m-101", "merchant-breach:BR-1101", "breach:BR-1088:rose.demo@example.com",
+            "suspicious:c-206"})
 
     def test_requested_reset_is_not_a_takeover(self):
         self.assertNotIn("takeover:m-103", {t["key"] for t in detect.all_threats(self.data)})
@@ -89,7 +90,7 @@ class ResponseTests(Base):
         self.assertIn("locked", self.status(r["charge:tx-4"], "lock_card"))
         self.assertIn("already done", self.status(r["merchant-breach:BR-1101"], "lock_card"))
         self.assertEqual(self.status(r["charge:tx-4"], "dispute"), "waiting for you")
-        self.assertEqual((s["threats"], s["stopped"], s["family_told"], s["waiting_for_you"]), (8, 5, 3, 1))
+        self.assertEqual((s["threats"], s["stopped"], s["family_told"], s["waiting_for_you"]), (9, 5, 3, 1))
 
     def test_card_is_locked_once_even_when_two_threats_need_it(self):
         self.run_once()
@@ -108,6 +109,25 @@ class ResponseTests(Base):
         r = self.by_key(self.run_once())
         self.assertEqual(self.status(r["charge:tx-4"], "dispute"), "dispute filed (simulated)")
 
+    def test_approving_one_dispute_files_only_that_dispute(self):
+        self.run_once()
+        runs = os.path.join(self.tmp, "runs")
+        runner.approve("dispute:tx-4", run_dir=runs, store=self.store, now="2026-11-20T14:05:00")
+        r = self.by_key(self.run_once())["charge:tx-4"]
+        self.assertEqual(self.status(r, "dispute"), "dispute filed (simulated)")
+        self.assertEqual(detect.load("gates.json", self.data)["dispute_needs_approval"], True)
+        with open(os.path.join(runs, sorted(f for f in os.listdir(runs) if f.endswith(".jsonl"))[-1])) as f:
+            guard = [json.loads(l) for l in f if '"guard_dispute"' in l][0]
+        self.assertIn("you approved this dispute at 2026-11-20T14:05:00", guard["output"]["reason"])
+        s = self.run_once()
+        self.assertEqual(s["waiting_for_you"], 0)
+        self.assertIn("already done", self.status(self.by_key(s)["charge:tx-4"], "dispute"))
+
+    def test_approve_refuses_what_is_not_waiting(self):
+        self.run_once()
+        with self.assertRaises(SystemExit):
+            runner.approve("dispute:tx-999", run_dir=os.path.join(self.tmp, "runs"), store=self.store)
+
     def test_no_persona_pass_means_no_card_lock(self):
         self.edit("verification.json", result="failed")
         r = self.by_key(self.run_once())
@@ -118,7 +138,7 @@ class ResponseTests(Base):
         s = self.run_once()
         self.assertEqual(s["stopped"], 0)
         self.assertEqual(s["family_told"], 0)
-        self.assertEqual(s["alerts"], 7)  # every threat but the phishing email, which is quarantined instead
+        self.assertEqual(s["alerts"], 8)  # every threat but the phishing email, which is quarantined instead
 
     def test_family_needs_consent(self):
         prof = detect.load("profile.json", self.data)
@@ -148,6 +168,25 @@ class BriefTests(Base):
     def test_brief_says_all_clear_when_nothing_is_new(self):
         self.run_once()
         self.assertEqual(brief.brief_lines(self.run_once()), ["All clear: nothing new since your last check."])
+
+    def test_brief_reports_an_approved_dispute(self):
+        self.run_once()
+        runner.approve("dispute:tx-4", run_dir=os.path.join(self.tmp, "runs"), store=self.store)
+        lines = brief.brief_lines(self.run_once())
+        self.assertTrue(lines[0].startswith("Nothing new"))
+        self.assertIn("dispute filed", lines[1])
+
+    def test_report_shows_messages_and_how_to_approve(self):
+        s = self.run_once()
+        out = os.path.join(self.tmp, "report.html")
+        page = open(brief.report(s, os.path.join(self.tmp, "runs"), out, client_key="")).read()
+        self.assertIn("To Rose", page)
+        self.assertIn("Do not call back, pay, or share any code.", page)
+        self.assertIn("To Sam (daughter)", page)
+        self.assertIn("python3 agent/run.py --approve dispute:tx-4", page)
+        # On a repeat run the messages still show, from the store.
+        page = open(brief.report(self.run_once(), os.path.join(self.tmp, "runs"), out, client_key="")).read()
+        self.assertIn("To Sam (daughter)", page)
 
     def test_audit_trail_covers_every_threat(self):
         s = self.run_once()
@@ -199,21 +238,15 @@ class FlagTests(Base):
         self.assertIn("statsig error: OSError", snap["auto_lock_card"]["source"])
 
     def test_senior_gate_off_misses_the_borderline_call(self):
-        # The "complete the loop" comparison: same data, gate on versus off.
-        with open(os.path.join(self.data, "calls.json")) as f:
-            calls = json.load(f)
-        calls.append({"id": "c-299", "kind": "voicemail", "from": "+1-555-0999", "caller_id": "Unknown",
-                      "at": "2026-11-20T15:00:00", "transcript": "Please call back about your gift card."})
-        with open(os.path.join(self.data, "calls.json"), "w") as f:
-            json.dump(calls, f)
+        # The "complete the loop" demo beat: the shipped data, gate on versus off.
         on = self.run_once()
         self.store = st.LocalStore(os.path.join(self.tmp, "t2.sqlite3"))
         off = runner.run(data_dir=self.data, run_dir=os.path.join(self.tmp, "runs2"),
                          outbox_dir=os.path.join(self.tmp, "outbox2"), store=self.store,
                          gate_check=lambda gate, user: {"value": gate not in (
                              "senior_protection", "kill_switch", "dispute_needs_approval"), "rule_id": "r1"})
-        self.assertIn("suspicious:c-299", self.by_key(on))
-        self.assertNotIn("suspicious:c-299", self.by_key(off))
+        self.assertIn("suspicious:c-206", self.by_key(on))
+        self.assertNotIn("suspicious:c-206", self.by_key(off))
         self.assertEqual(off["gates"]["senior_protection"], {"value": False, "source": "statsig"})
 
 

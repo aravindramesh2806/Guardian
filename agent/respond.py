@@ -62,8 +62,11 @@ def decide(threat, profile):
     return [{"type": "alert", "key": "alert:" + threat["key"]}]
 
 
-def guard(action, gates, verification, profile):
-    """May this action run now? Returns (allowed, reason)."""
+def guard(action, gates, verification, profile, approvals=None):
+    """May this action run now? Returns (allowed, reason).
+
+    `approvals` maps action keys the person said yes to (agent/run.py --approve) to when they said it.
+    """
     if action["type"] == "alert":
         return True, "alerts always go to you"
     if gates.get("kill_switch"):
@@ -88,6 +91,9 @@ def guard(action, gates, verification, profile):
             return False, "the card issuer has no lock option for agents; call them"
         return True, "verified person, auto-lock on, issuer supports locking"
     if action["type"] == "dispute":
+        approved = (approvals or {}).get(action["key"])
+        if approved:
+            return True, "you approved this dispute at %s" % approved
         if gates.get("dispute_needs_approval", True):
             return False, "disputes wait for your confirmation"
         return True, "auto-dispute is on"
@@ -139,11 +145,13 @@ def act(action, threat, profile, outbox_dir):
         msg = "Guardian: %s just got a likely scam (%s). It has been blocked. You may want to check in." % (
             profile["name"].split(" ")[0], threat["summary"])
         path = _append(outbox_dir, "family_alerts.jsonl", {"to": c["name"], "channel": c["channel"], "text": msg})
-        return {"status": "%s told (simulated)" % c["name"], "file": path, "text": msg}
+        return {"status": "%s told (simulated)" % c["name"], "file": path, "text": msg,
+                "to": c["name"], "channel": c["channel"]}
     if action["type"] == "alert":
         text, drafted_by = alert_text(threat, profile)
         path = _append(outbox_dir, "alerts.jsonl", {"threat": threat["key"], "severity": threat["severity"], "text": text})
-        return {"status": "alert sent (simulated)", "file": path, "drafted_by": drafted_by, "text": text}
+        return {"status": "alert sent (simulated)", "file": path, "drafted_by": drafted_by, "text": text,
+                "to": profile["name"].split(" ")[0], "channel": "Guardian app"}
     raise ValueError("unknown action " + action["type"])
 
 
@@ -152,5 +160,6 @@ def held(action, threat, profile, reason):
     if action["type"] == "dispute":
         return {"status": "waiting for you", "reason": reason,
                 "ask": "Dispute $%.2f at %s on card ending %s?" % (
-                    action["amount"], action["merchant"], card(profile, action["card"])["last4"])}
+                    action["amount"], action["merchant"], card(profile, action["card"])["last4"]),
+                "approve": action["key"]}
     return {"status": "waiting for you", "reason": reason}
