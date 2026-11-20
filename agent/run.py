@@ -47,7 +47,10 @@ def handle(threat, ctx):
         log.event("guard", "guard_" + action["type"], {"action": action["key"]},
                   {"allowed": allowed, "reason": reason}, threat["key"])
         if allowed:
-            result = respond.act(action, threat, ctx["profile"], ctx["outbox_dir"])
+            try:
+                result = respond.act(action, threat, ctx["profile"], ctx["outbox_dir"])
+            except Exception as e:  # a service outage must not stop the run; the action retries next run
+                result = {"status": respond.FAILED, "reason": "%s: %s" % (type(e).__name__, str(e)[:120])}
         else:
             result = respond.held(action, threat, ctx["profile"], reason)
         log.event("act", "act_" + action["type"], {"action": action["key"]}, result, threat["key"])
@@ -74,18 +77,24 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
     ctx["gates"] = flags.values(ctx["flags"])
     ctx["log"].gates = ctx["gates"]
     ctx["log"].event("gates", "check_gates", {}, ctx["flags"], "run")
-    results = [handle(t, ctx) for t in detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"])]
+    sources = {}
+    threats = detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"], sources=sources)
+    ctx["log"].event("sources", "read_sources", {}, sources, "run")
+    results = [handle(t, ctx) for t in threats]
 
     def count(pred):
         return sum(1 for r in results for a in r["actions"] if pred(a))
+    done = respond.is_done
     summary = {
         "run_id": run_id, "store": ctx["store"].name, "persona": ctx["verification"].get("result"),
+        "sources": sources,
         "threats": len(results), "new_threats": sum(1 for r in results if r["new"]),
         "stopped": count(lambda a: a["action"] in ("quarantine", "lock_card", "dispute", "block_number")
-                         and a["status"].endswith("(simulated)")),
-        "alerts": count(lambda a: a["action"] == "alert" and a["status"].endswith("(simulated)")),
-        "family_told": count(lambda a: a["action"] == "notify_trusted" and a["status"].endswith("(simulated)")),
+                         and done(a["status"])),
+        "alerts": count(lambda a: a["action"] == "alert" and done(a["status"])),
+        "family_told": count(lambda a: a["action"] == "notify_trusted" and done(a["status"])),
         "waiting_for_you": count(lambda a: a["status"] == "waiting for you"),
+        "failed": count(lambda a: a["status"] == respond.FAILED),
         "gates": ctx["flags"],
         "results": results,
     }

@@ -29,7 +29,8 @@ def brief_lines(summary):
         summary["waiting_for_you"], "s" if summary["waiting_for_you"] == 1 else "",
         (", and your family was told about %d" % family) if family else "")]
     for r in new[:3]:
-        done = [a["status"] for a in r["actions"] if a["status"].endswith("(simulated)") and a["action"] != "alert"]
+        done = [a["status"] for a in r["actions"]
+                if a["status"].endswith(("(simulated)", "(firedrill)")) and a["action"] != "alert"]
         lines.append("- " + r["summary"] + (" -> " + "; ".join(done) if done else ""))
     for r in summary["results"]:
         for a in r["actions"]:
@@ -76,7 +77,11 @@ def gate_badge(summary):
         return ""
     parts = ["%s %s (%s)" % (name, "on" if g["value"] else "off", g["source"].split(" ")[0])
              for name, g in gates.items()]
-    return "<p class='ev'>Gates: %s</p>" % html.escape(" · ".join(parts))
+    line = "<p class='ev'>Gates: %s</p>" % html.escape(" · ".join(parts))
+    sources = summary.get("sources") or {}
+    if sources:
+        line += "<p class='ev'>Sources: %s</p>" % html.escape(" · ".join("%s %s" % kv for kv in sources.items()))
+    return line
 
 
 def report(summary, run_dir, out, client_key=None):

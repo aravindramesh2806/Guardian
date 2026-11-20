@@ -104,9 +104,9 @@ def threat_seen(store, key):
 
 
 def action_done(store, key):
-    """An action that already ran. Held actions are not 'done', so they can run once approved."""
-    found = store.rows("SELECT status, run_id FROM actions WHERE action_key = %s AND status <> %s",
-                       (key, "waiting for you"))
+    """An action that already ran. Held and failed actions are not 'done', so they run again later."""
+    found = store.rows("SELECT status, run_id FROM actions WHERE action_key = %s AND status <> %s AND status <> %s",
+                       (key, "waiting for you", "failed, will retry"))
     return found[0] if found else None
 
 

@@ -29,7 +29,9 @@ def analytics_properties(rec):
         props["score"] = ev["score"]
     status = out.get("status")
     if isinstance(status, str):
-        props["outcome"] = ("done" if status.endswith("(simulated)") else "held" if status == "waiting for you"
+        props["outcome"] = ("done" if status.endswith(("(simulated)", "(firedrill)"))
+                            else "held" if status == "waiting for you"
+                            else "failed" if status.startswith("failed")
                             else "repeat" if status.startswith("already done") else "other")
     if isinstance(out.get("drafted_by"), str):
         props["drafted_by"] = out["drafted_by"].split(" ")[0]

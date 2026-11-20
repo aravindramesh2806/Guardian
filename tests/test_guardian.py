@@ -383,5 +383,93 @@ class DemoTests(Base):
         self.assertEqual(detect.load("verification.json", self.data)["checked_at"], "2026-11-01T00:00:00Z")
 
 
+
+class FakeFiredrill:
+    """A local stand-in for Firedrill's synthetic Gmail, Stripe and Slack (the documented invoke envelope)."""
+
+    def __init__(self, data_dir):
+        import http.server
+        import threading
+        self.calls, self.down = [], set()
+        inbox = json.load(open(os.path.join(data_dir, "inbox.json")))
+        charges = [{"id": t["id"], "amount": int(round(t["amount"] * 100)), "created": t["date"], "status": "succeeded",
+                    "metadata": {"card": t["card"], "merchant": t["merchant"]}}
+                   for t in json.load(open(os.path.join(data_dir, "transactions.json")))]
+        fake = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                service = self.path.strip("/")
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                fake.calls.append((service, body["operation"], body.get("arguments"), body.get("idempotency_key")))
+                if service in fake.down:
+                    out, code = {"error": {"code": "dependency_unavailable"}}, 503
+                else:
+                    out, code = {
+                        "messages.list": {"messages": inbox}, "labels.list": {"labels": []},
+                        "labels.create": {"id": "Label_9"}, "messages.modify": {"id": "ok"},
+                        "charges.list": {"data": charges}, "chat.postMessage": {"ok": True},
+                    }.get(body["operation"], {"error": {"code": "operation_not_declared"}}), 200
+                raw = json.dumps(out).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = "http://127.0.0.1:%d/" % self.server.server_port
+
+    def ops(self, service):
+        return [c for c in self.calls if c[0] == service]
+
+
+class FiredrillTests(Base):
+    def setUp(self):
+        super().setUp()
+        from agent import firedrill
+        firedrill._label_ids.clear()
+        self.fd = FakeFiredrill(self.data)
+        self.addCleanup(self.fd.server.shutdown)
+        for service, var in firedrill.ENV.items():
+            os.environ[var] = self.fd.base + service
+            self.addCleanup(os.environ.pop, var, None)
+
+    def test_drill_finds_the_same_threats_and_acts_on_the_services(self):
+        s = self.run_once()
+        self.assertEqual(s["sources"], {"inbox": "firedrill (5)", "card_charges": "firedrill (5)"})
+        self.assertEqual((s["threats"], s["stopped"], s["family_told"], s["failed"]), (8, 5, 3, 0))
+        modify = [c for c in self.fd.ops("gmail") if c[1] == "messages.modify"]
+        self.assertEqual(len(modify), 1)
+        self.assertEqual(modify[0][2]["requestBody"]["removeLabelIds"], ["INBOX"])
+        self.assertEqual(len(self.fd.ops("slack")), 3)
+        self.assertTrue(all(c[3] for c in self.fd.ops("slack")))  # every post carries an idempotency key
+        r = self.by_key(s)
+        self.assertEqual(self.status(r["phishing:m-101"], "quarantine"), "quarantined (firedrill)")
+
+    def test_gmail_outage_skips_email_but_protection_goes_on(self):
+        self.fd.down.add("gmail")
+        s = self.run_once()
+        self.assertIn("unavailable", s["sources"]["inbox"])
+        kinds = {r["kind"] for r in s["results"]}
+        self.assertNotIn("phishing", kinds)
+        self.assertIn("scam_call", kinds)
+        self.assertIn("card_misuse", kinds)
+
+    def test_failed_family_alert_retries_on_the_next_run(self):
+        self.fd.down.add("slack")
+        first = self.run_once()
+        self.assertEqual((first["family_told"], first["failed"]), (0, 3))
+        self.fd.down.clear()
+        second = self.run_once()
+        self.assertEqual((second["family_told"], second["failed"]), (3, 0))
+        third = self.run_once()
+        self.assertEqual(third["family_told"], 0)  # never told twice
+
+
 if __name__ == "__main__":
     unittest.main()

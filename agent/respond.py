@@ -7,7 +7,16 @@ import json
 import os
 from datetime import datetime, timedelta
 
-from agent import models
+from agent import firedrill, models
+
+# How a finished action's status ends: written to the local outbox, or carried out on a Firedrill service.
+DONE_SUFFIXES = ("(simulated)", "(firedrill)")
+# An action whose service failed. It is not "done", so the next run tries it again.
+FAILED = "failed, will retry"
+
+
+def is_done(status):
+    return isinstance(status, str) and status.endswith(DONE_SUFFIXES)
 
 STEPS = {
     "identity_breach": [
@@ -141,8 +150,15 @@ def _append(outbox_dir, name, record):
 
 
 def act(action, threat, profile, outbox_dir):
-    """Carry out one allowed action (simulated). Returns the result record."""
+    """Carry out one allowed action. Returns the result record.
+
+    Quarantine and family alerts go to Firedrill's synthetic Gmail and Slack when their addresses are set;
+    everything else is simulated into the outbox. A service error raises; run.handle records it as FAILED.
+    """
     if action["type"] == "quarantine":
+        if firedrill.configured("gmail"):
+            firedrill.quarantine(action["email"])
+            return {"status": "quarantined (firedrill)", "label": firedrill.QUARANTINE_LABEL}
         path = _append(outbox_dir, "quarantine.jsonl", {"email": action["email"], "label": "Guardian/Quarantine"})
         return {"status": "quarantined (simulated)", "file": path}
     if action["type"] == "lock_card":
@@ -159,6 +175,9 @@ def act(action, threat, profile, outbox_dir):
         c = action["contact"]
         msg = "Guardian: %s just got a likely scam (%s). It has been blocked. You may want to check in." % (
             profile["name"].split(" ")[0], threat["summary"])
+        if firedrill.configured("slack"):
+            channel = firedrill.tell_family(msg, action["key"])
+            return {"status": "%s told in #%s (firedrill)" % (c["name"], channel), "text": msg}
         path = _append(outbox_dir, "family_alerts.jsonl", {"to": c["name"], "channel": c["channel"], "text": msg})
         return {"status": "%s told (simulated)" % c["name"], "file": path, "text": msg}
     if action["type"] == "alert":
