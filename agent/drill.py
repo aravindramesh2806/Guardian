@@ -6,7 +6,8 @@ Each step runs one Guardian pass over the synthetic Gmail and Stripe (see agent/
 answers on stdout with {"id": ..., "output": <the daily brief>} or {"id": ..., "error": ...}.
 
 The person can reply in plain words. A clear yes to the dispute ("yes, dispute it") approves disputes
-for the rest of the session; nothing else they say changes a gate. Stdout carries only protocol lines.
+for the rest of the session; nothing else they say changes a gate. Stdout carries only protocol lines,
+after one readiness line (READY) that the plan waits for.
 """
 import json
 import os
@@ -61,9 +62,15 @@ class Session:
         return "\n".join(lines)
 
 
+READY = "guardian-drill-ready"
+
+
 def main(stdin=sys.stdin, stdout=sys.stdout):
-    runner.load_env()
+    # No .env here: a drill sees only what the Firedrill plan gives it, so it never sends events to the
+    # real Amplitude or Statsig, or calls a real model, from a simulated world.
     real_stdout, sys.stdout = stdout, sys.stderr  # nothing but protocol lines on stdout
+    real_stdout.write(READY + "\n")
+    real_stdout.flush()
     sessions = {}
     try:
         for line in stdin:

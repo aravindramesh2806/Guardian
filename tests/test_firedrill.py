@@ -169,7 +169,9 @@ class DrillProtocolTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {k: "" for k in URLS}):
             out = io.StringIO()
             drill.main(io.StringIO('{"id": "a", "session": "s", "kind": "message", "input": "hi"}\nnot json\n'), out)
-        lines = [json.loads(l) for l in out.getvalue().splitlines()]
+        first, *rest = out.getvalue().splitlines()
+        self.assertEqual(first, drill.READY)
+        lines = [json.loads(l) for l in rest]
         self.assertEqual(lines[0]["id"], "a")
         self.assertIn("new threats", lines[0]["output"])
         self.assertIn("error", lines[1])
