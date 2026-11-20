@@ -1,11 +1,14 @@
 // Browser test of the whole app with a virtual passkey (Chromium WebAuthn emulation).
 // Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots>
 // e.g. GUARDIAN_USERS_DIR=/tmp/g-e2e .venv/bin/python app/server.py &  then  node tests/e2e_app.js /tmp
+// Persona's widget doesn't run headless, so the trusted person stays "not invited" here (tests/test_app.py
+// covers the invite itself).
 const { chromium } = require('playwright');
 const dir = process.argv[2];
 (async () => {
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 390, height: 844 } });
+  await ctx.grantPermissions(['notifications'], { origin: 'http://localhost:8800' });
   const p = await ctx.newPage();
   const errors = []; p.on('pageerror', e => errors.push(e.message)); p.on('console', m => m.type() === 'error' && errors.push(m.text()));
   const cdp = await ctx.newCDPSession(p);
@@ -14,39 +17,44 @@ const dir = process.argv[2];
     hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
   const shot = async (name) => { await p.screenshot({ path: `${dir}/e2e-${name}.png`, fullPage: true }); };
   const text = async () => (await p.textContent('main')).replace(/\s+/g, ' ');
+  const tap = (label) => p.getByRole('button', { name: label, exact: true }).click();
+
   await p.goto('http://localhost:8800/');
   await shot('welcome');
-  await p.getByText('Get started').click();
+  await tap('Get started');
+  await p.getByText('Who is Guardian for?').waitFor();
+  await p.getByRole('button', { name: /^Me / }).click();
   await p.fill('#name', 'Rose');
-  await p.getByText('Create my account with Face ID or fingerprint').click();
-  await p.getByText('Step 1 of 5').waitFor();
-  console.log('1 registered with a passkey -> setup step 1');
-  await p.getByText('Continue', { exact: true }).click();
-  await p.getByText('Continue with sample data for now').click();
+  await tap('Continue with Face ID');
+  await p.getByText('A quick check that you\'re really here').waitFor();
+  console.log('1 registered with a passkey -> Persona step (step 2 of 6)');
+  await tap('Do this later');
+  await p.getByText('Guardian will never').waitFor();
+  await tap('Continue');
   await p.fill('#fname', 'Sam (daughter)'); await p.fill('#fphone', '+1 555 0142');
-  await p.getByText('Continue', { exact: true }).click();
-  await p.getByText('Act for me, then tell me').click();
-  await p.check('#senior');
-  await shot('setup-4');
-  await p.getByText('Continue', { exact: true }).click();
-  await p.getByText('Step 5 of 5').waitFor();
-  await p.getByText('Send me a test alert').click();
-  await p.getByText('This is what a Guardian alert looks like').waitFor();
-  console.log('2 setup done, test alert shown');
-  await p.getByText('Go to my Guardian').click();
-  await p.getByText('Hello, Rose').waitFor();
+  await tap('Continue');
+  await p.getByRole('radio', { name: /Act for me, then tell me/ }).click();
+  await p.getByRole('switch').click();
+  await shot('setup-mode');
+  await tap('Continue');
+  await p.getByText('Step 6 of 6').waitFor();
+  await tap('Send me a practice alert');
+  await tap('Yes, I got it');
+  console.log('2 setup done, practice alert sent and confirmed');
+
+  await p.getByText('Hi, Rose').waitFor();
   await shot('home');
   let t = await text();
-  console.log('3 home status:', /You're protected/.test(t) ? "You're protected" : 'MISSING', '| items:', (await p.$$('.card.item')).length,
-    '| asks:', await p.locator('.card', { hasText: 'Needs you' }).count(), '| sample notice:', /sample data/.test(t));
-  console.log('   persona card:', await p.getByText('Verify with Persona').count() === 1);
+  console.log('3 home hero:', /Almost ready/.test(t) ? 'Almost ready (sample data)' : 'MISSING', '| items:', (await p.$$('.card.item')).length,
+    '| asks:', await p.getByText('Yes, do it').count());
+  console.log('   family not invited, needs Persona first:', /Sam \(daughter\) not invited yet/.test(t) && /First, do the Persona check/.test(t));
   await p.getByText('Verify with Persona').click();
   await p.getByText(/isn.t set up on this computer|reach the Persona check/).waitFor();
   console.log('   verify page (no sidecar):', (await p.textContent('#status')).trim());
   await shot('verify');
   await p.getByText('Back to Guardian').click();
-  await p.getByText('Hello, Rose').waitFor();
-  const ask = p.locator('.card', { hasText: 'Dispute $389.00' });
+  await p.getByText('Hi, Rose').waitFor();
+  const ask = p.locator('.card', { hasText: 'Dispute $389.00' }).filter({ has: p.getByText('Yes, do it') });
   await ask.getByText('Yes, do it').click();
   await p.waitForTimeout(1500);
   t = await text();
@@ -56,19 +64,17 @@ const dir = process.argv[2];
   await phish.getByText('This was real, not a scam').click();
   await p.getByText(/You marked 1 as real/).waitFor();
   console.log('5 "This was real" -> moved under "You marked 1 as real"');
-  await p.getByText('Simulate their YES (no SMS account yet)').click();
-  await p.getByText('Agreed to be told about serious scams.').waitFor();
-  await p.getByText("Pause Guardian's actions").click();
-  await p.getByText("Guardian's actions are paused.").waitFor();
+  await tap("Pause Guardian's actions");
+  await p.getByText("Guardian's actions are paused").waitFor();
   await shot('paused');
-  console.log('6 family agreed; paused');
-  await p.getByText("Resume Guardian's actions").click();
-  await p.getByText("You're protected.").waitFor();
-  await p.getByText('Sign out').click();
-  await p.getByText('I already use Guardian').click();
-  await p.getByText('Hello, Rose').waitFor();
+  await tap("Resume Guardian's actions");
+  await p.getByText('Almost ready').waitFor();
+  console.log('6 paused and resumed');
+  await tap('Sign out');
+  await tap('I already have an account');
+  await p.getByText('Hi, Rose').waitFor();
   console.log('7 signed out, signed back in with the same passkey');
-  await p.getByText('Delete my data').click();
+  await tap('Delete my data');
   await p.getByText(/Tap again to delete everything/).click();
   await p.getByText('Get started').waitFor();
   console.log('8 deleted -> back at welcome');

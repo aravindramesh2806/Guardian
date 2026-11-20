@@ -182,7 +182,7 @@ def persona_finish(uid, fid):
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
-                ".webmanifest": "application/manifest+json"}
+                ".webmanifest": "application/manifest+json", ".png": "image/png"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -258,7 +258,9 @@ class Handler(BaseHTTPRequestHandler):
             except core.AppError:
                 return self._send(200, {"signed_in": False}, cookie="")
             return self._send(200, {"signed_in": True, "name": meta["name"], "setup_done": meta["setup_done"],
-                                    "stepped_up": time.time() - s["stepped_up_at"] < STEP_UP_SECONDS})
+                                    "stepped_up": time.time() - s["stepped_up_at"] < STEP_UP_SECONDS,
+                                    # The setup screens show whether the Persona check is done and Gmail is offered.
+                                    "verified": core.verification(s["uid"]), "gmail_available": gmail.configured()})
         if path == "/api/feed":
             _, s = self._session()
             if not s:
