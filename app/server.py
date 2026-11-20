@@ -295,7 +295,7 @@ class Handler(BaseHTTPRequestHandler):
                     s["stepped_up_at"] = time.time()
                 return self._send(200, {"ok": True})
             stepped_up = time.time() - s["stepped_up_at"] < STEP_UP_SECONDS
-            needs_step_up = path in ("/api/approve", "/api/delete") or (
+            needs_step_up = path in ("/api/approve", "/api/already-done", "/api/delete") or (
                 path in ("/api/mode", "/api/setup") and body.get("mode") == "act" and core.load(uid)["mode"] != "act")
             if needs_step_up and not stepped_up:
                 return self._send(403, {"error": "Please confirm it's you first.", "step_up": True})
@@ -315,6 +315,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, core.test_alert(uid))
             if path == "/api/check-now":
                 core.run_for(uid)
+                return self._send(200, core.feed(uid))
+            if path == "/api/already-done":
+                core.already_done(uid, str(body.get("key") or ""))
                 return self._send(200, core.feed(uid))
             if path == "/api/approve":
                 core.approve(uid, str(body.get("key") or ""))

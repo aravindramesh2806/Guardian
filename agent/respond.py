@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from agent import firedrill, models
 
 # How a finished action's status ends: written to the local outbox, or carried out on a Firedrill service.
-DONE_SUFFIXES = ("(simulated)", "(firedrill)")
+DONE_SUFFIXES = ("(simulated)", "(firedrill)", "(you confirmed)")
 # An action whose service failed. It is not "done", so the next run tries it again.
 FAILED = "failed, will retry"
 
@@ -218,6 +218,26 @@ def act(action, threat, profile, outbox_dir):
         return {"status": "alert sent (simulated)", "file": path, "drafted_by": drafted_by, "text": text,
                 "to": profile["name"].split(" ")[0], "channel": "Guardian app"}
     raise ValueError("unknown action " + action["type"])
+
+
+STUCK = {
+    "quarantine": "moving an email to quarantine. Check your inbox: is it still there?",
+    "block_number": "blocking %(number)s. Check your phone's blocked list.",
+    "lock_card": "locking the card ending %(last4)s. Check your bank app: is the card locked?",
+    "dispute": "disputing $%(amount).2f at %(merchant)s. Ask your card issuer whether it was filed before "
+               "trying again, so it is not filed twice.",
+    "notify_trusted": "telling %(contact)s. Ask them whether they got the message.",
+    "alert": "sending you an alert.",
+}
+
+
+def stuck_ask(action, profile):
+    """What to ask when a run died part-way through an action, so the person can check before anything repeats."""
+    c = card(profile, action["card"]) if action.get("card") else None
+    fields = {"number": action.get("number", "the number"), "last4": (c or {}).get("last4", "?"),
+              "amount": action.get("amount") or 0, "merchant": action.get("merchant", ""),
+              "contact": (action.get("contact") or {}).get("name", "your family")}
+    return "Guardian stopped part-way through " + STUCK.get(action["type"], "an action.") % fields
 
 
 def held(action, threat, profile, reason):

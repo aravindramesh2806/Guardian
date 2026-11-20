@@ -70,6 +70,35 @@ class Core(unittest.TestCase):
         self.assertEqual(f["needs_you"], [])
         self.assertIn("Dispute filed", next(i for i in f["items"] if "389.00" in i["summary"])["did"])
 
+    def stick(self, uid):
+        """Make it look as if a check died part-way through quarantining the PayLinc email."""
+        from agent import store as st
+        st.mark_started(core._store(uid), {"key": "quarantine:m-101", "type": "quarantine"}, "phishing:m-101",
+                        "run-crashed", "2000-01-01T00:00:00")
+        core.run_for(uid)
+        return next(n for n in core.feed(uid)["needs_you"] if n["key"] == "quarantine:m-101")
+
+    def test_a_stuck_action_is_in_needs_you_and_already_happened_closes_it(self):
+        uid = new_user()
+        n = self.stick(uid)
+        self.assertTrue(n["stuck"])
+        self.assertIn("stopped part-way", n["ask"])
+        dispute = next(n["key"] for n in core.feed(uid)["needs_you"] if not n["stuck"])
+        with self.assertRaises(core.AppError):  # the dispute is waiting, but it is not stuck
+            core.already_done(uid, dispute)
+        core.already_done(uid, "quarantine:m-101")
+        f = core.feed(uid)
+        self.assertNotIn("quarantine:m-101", [n["key"] for n in f["needs_you"]])
+        self.assertIn("Moved to quarantine", next(i for i in f["items"] if "paylinc" in i["summary"])["did"])
+
+    def test_a_stuck_action_can_be_tried_again(self):
+        uid = new_user()
+        self.stick(uid)
+        core.approve(uid, "quarantine:m-101")
+        f = core.feed(uid)
+        self.assertNotIn("quarantine:m-101", [n["key"] for n in f["needs_you"]])
+        self.assertIn("Moved to quarantine", next(i for i in f["items"] if "paylinc" in i["summary"])["did"])
+
     def test_this_was_real_undoes_once_and_never_acts_again(self):
         uid = new_user()
         phish = next(i for i in core.feed(uid)["items"] if "paylinc" in i["summary"])
@@ -165,6 +194,8 @@ class Server(unittest.TestCase):
         uid, token = self.session(stepped_up=False)
         key = core.feed(uid)["needs_you"][0]["key"]
         status, body, _ = self.request("POST", "/api/approve", {"key": key}, token)
+        self.assertEqual((status, body.get("step_up")), (403, True))
+        status, body, _ = self.request("POST", "/api/already-done", {"key": key}, token)
         self.assertEqual((status, body.get("step_up")), (403, True))
         status, body, _ = self.request("POST", "/api/delete", {}, token)
         self.assertEqual((status, body.get("step_up")), (403, True))
