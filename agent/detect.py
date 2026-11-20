@@ -138,7 +138,15 @@ def phishing_score(message, known_domains):
     return min(round(score, 2), 1.0), reasons
 
 
-def phishing(profile, inbox, threshold=0.7, borderline=0.4):
+def _model_label(ask, key, text):
+    """One model answer for a borderline message: through `ask` (cached and capped per run) when given."""
+    if ask is None:
+        return models.classify(text, default="suspicious")
+    label, by = ask(key, text)
+    return (label, by) if label else ("suspicious", "rules (%s)" % by)
+
+
+def phishing(profile, inbox, threshold=0.7, borderline=0.4, ask=None):
     """Phishing emails, with a model check only for borderline scores."""
     out = []
     known = {a["domain"] for a in profile["accounts"]}
@@ -148,7 +156,7 @@ def phishing(profile, inbox, threshold=0.7, borderline=0.4):
         if score >= threshold:
             verdict = "phishing"
         elif score >= borderline:
-            verdict, model = models.classify(m["subject"] + "\n" + m["body"], default="suspicious")
+            verdict, model = _model_label(ask, "email:" + m["id"], m["subject"] + "\n" + m["body"])
             if verdict not in ("phishing", "suspicious"):
                 # The model may raise concern, never clear a rule hit: the email itself could have told it
                 # to answer "safe". Borderline stays at least suspicious.
@@ -221,7 +229,7 @@ def call_score(call, contacts, known_domains=()):
     return min(round(score, 2), 1.0), reasons
 
 
-def scam_calls(profile, calls, senior=None):
+def scam_calls(profile, calls, senior=None, ask=None):
     """Scam calls, voicemails and texts. Senior protection lowers the bar by 0.1.
 
     `senior` comes from the senior_protection gate; None falls back to the profile setting.
@@ -238,7 +246,7 @@ def scam_calls(profile, calls, senior=None):
         if score >= threshold:
             verdict = "scam_call"
         elif score >= borderline:
-            label, model = models.classify(c.get("transcript", ""), default="suspicious")
+            label, model = _model_label(ask, "call:" + c["id"], c.get("transcript", ""))
             # As with email: a "safe" answer cannot clear a borderline call (the transcript is attacker text).
             verdict = "scam_call" if label == "phishing" else "suspicious"
         if verdict == "scam_call":
@@ -349,8 +357,8 @@ def all_threats(data_dir=None, senior=None, sources=None, ask=None):
                       lambda: load("transactions.json", data_dir))
     found = (breaches(profile, load("breaches.json", data_dir), receipts)
              + takeover(profile, inbox)
-             + phishing(profile, inbox)
-             + scam_calls(profile, load("calls.json", data_dir), senior)
+             + phishing(profile, inbox, ask=ask)
+             + scam_calls(profile, load("calls.json", data_dir), senior, ask=ask)
              + card_misuse(profile, charges, receipts))
     calls = load("calls.json", data_dir)
     if ask is not None:
