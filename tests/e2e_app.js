@@ -1,10 +1,11 @@
 // Browser test of the whole app with a virtual passkey (Chromium WebAuthn emulation).
-// Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots>
+// Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots> <users folder>
 // e.g. GUARDIAN_USERS_DIR=/tmp/g-e2e .venv/bin/python app/server.py &  then  node tests/e2e_app.js /tmp
 // Persona's widget doesn't run headless, so the trusted person stays "not invited" here (tests/test_app.py
 // covers the invite itself).
 const { chromium } = require('playwright');
-const dir = process.argv[2];
+const dir = process.argv[2], usersDir = process.argv[3];
+const fs = require('fs');
 (async () => {
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 390, height: 844 } });
@@ -25,9 +26,19 @@ const dir = process.argv[2];
   await p.getByText('Who is Guardian for?').waitFor();
   await p.getByRole('button', { name: /^Me / }).click();
   await p.fill('#name', 'Rose');
+  await p.fill('#email', 'rose.e2e@example.com');
   await tap('Continue with Face ID');
+  await p.getByText('Check your email').waitFor();
+  await shot('verify-email');
+  const mail = fs.readFileSync(usersDir + '/dev_mail.log', 'utf8');
+  const code = mail.match(/Your Guardian code is (\d{6})/g).pop().slice(-6);
+  await p.fill('#code', '000000' === code ? '111111' : '000000');
+  await tap('Confirm');
+  await p.getByText(/isn't right/).waitFor();
+  await p.fill('#code', code);
+  await tap('Confirm');
   await p.getByText('A quick check that you\'re really here').waitFor();
-  console.log('1 registered with a passkey -> Persona step (step 2 of 6)');
+  console.log('1 registered with a passkey, wrong code refused, emailed code accepted -> Persona step (step 2 of 6)');
   await tap('Do this later');
   await p.getByText('Guardian will never').waitFor();
   await tap('Continue');
@@ -69,7 +80,7 @@ const dir = process.argv[2];
   await shot('paused');
   await tap("Resume Guardian's actions");
   await p.getByText('Almost ready').waitFor();
-  console.log('6 paused and resumed');
+  console.log('6 paused and resumed | alerts button:', await p.getByText('Turn on alerts on this device').count() === 1);
   await tap('Sign out');
   await tap('I already have an account');
   await p.getByText('Hi, Rose').waitFor();

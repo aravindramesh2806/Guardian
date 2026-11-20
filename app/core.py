@@ -8,6 +8,8 @@ thread and request threads at once.
 Until Gmail is connected, a new workspace runs on the fictional sample data in data/, clearly labelled.
 The workspace store is always local SQLite: a shared SingleStore needs per-user partitioning first.
 """
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -23,6 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import gmail  # noqa: E402
+import mailer  # noqa: E402
 import vault  # noqa: E402
 from agent import respond  # noqa: E402
 from agent import run as runner  # noqa: E402
@@ -99,8 +102,30 @@ def save(uid, meta):
     _write(_dir(uid, "meta.json"), meta)
 
 
-def create_user(name, credential):
-    """A new person with one passkey. Returns their id."""
+EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
+CODE_MINUTES, CODE_TRIES, UNVERIFIED_HOURS = 15, 5, 24
+
+
+def clean_email(email):
+    email = str(email or "").strip()
+    if len(email) > 254 or not EMAIL_RE.fullmatch(email):
+        raise AppError("Please enter a valid email address.")
+    return email.lower()
+
+
+def email_in_use(email):
+    """Is this address already a verified Guardian account? (Unverified ones expire, so they don't count.)"""
+    email = clean_email(email)
+    for uid in all_users():
+        meta = _read(_dir(uid, "meta.json"), {})
+        if meta.get("email_verified") and meta.get("email") == email:
+            return True
+    return False
+
+
+def create_user(name, credential, email):
+    """A new person with one passkey, not usable until their email is confirmed. Returns their id."""
+    email = clean_email(email)
     uid = secrets.token_hex(16)
     with _lock(uid):
         shutil.copytree(SAMPLE, _dir(uid, "data"))
@@ -111,7 +136,8 @@ def create_user(name, credential):
         save(uid, {"id": uid, "name": _clean_name(name), "created": _now(), "setup_done": False,
                    "who": "me", "mode": "tell", "paused": False, "family": None, "data_source": "sample",
                    "credentials": [credential], "test_alert_at": None, "last_run": None, "last_error": None,
-                   "gmail": None, "shadow": False, "accounts": []})
+                   "gmail": None, "shadow": False, "accounts": [], "email": email, "email_verified": False,
+                   "email_code": None, "push": []})
         _index_add(credential["id"], uid)
         _apply_settings(uid)
     return uid
@@ -170,6 +196,117 @@ def all_users():
     if not os.path.isdir(USERS):
         return []
     return [d for d in os.listdir(USERS) if re.fullmatch(r"[0-9a-f]{32}", d)]
+
+
+# ---------- email check at sign-up ----------
+
+def _hash_code(code, salt):
+    return hashlib.sha256((salt + ":" + code).encode()).hexdigest()
+
+
+def issue_code(uid, now=None):
+    """Email a fresh 6-digit code. At most one a minute and five an hour. Returns the code (for tests only:
+    the server never shows it)."""
+    now = now or time.time()
+    with _lock(uid):
+        meta = load(uid)
+        if meta.get("email_verified"):
+            raise AppError("Your email is already confirmed.")
+        state = meta.get("email_code") or {}
+        sent = [t for t in state.get("sent", []) if now - t < 3600]
+        if sent and now - sent[-1] < 60:
+            raise AppError("Please wait a minute before asking for another code.")
+        if len(sent) >= 5:
+            raise AppError("Too many codes in the last hour. Please try again later.")
+        code, salt = "%06d" % secrets.randbelow(10 ** 6), secrets.token_hex(8)
+        meta["email_code"] = {"hash": _hash_code(code, salt), "salt": salt, "expires": now + CODE_MINUTES * 60,
+                              "attempts": 0, "sent": sent + [now]}
+        save(uid, meta)
+    mailer.send(meta["email"], "Your Guardian code: %s" % code,
+                "Your Guardian code is %s.\n\nIt expires in %d minutes. Enter it in Guardian to finish signing up.\n\n"
+                "If you didn't sign up for Guardian, ignore this email: the account is deleted after %d hours.\n"
+                "Guardian will never ask you for this code by phone, text or email."
+                % (code, CODE_MINUTES, UNVERIFIED_HOURS))
+    return code
+
+
+def verify_code(uid, code, now=None):
+    now = now or time.time()
+    with _lock(uid):
+        meta = load(uid)
+        if meta.get("email_verified"):
+            return True
+        state = meta.get("email_code")
+        if not state or now > state["expires"]:
+            raise AppError("That code has expired. Ask for a new one.")
+        if state["attempts"] >= CODE_TRIES:
+            raise AppError("Too many wrong codes. Ask for a new one.")
+        code = re.sub(r"\D", "", str(code or ""))
+        if not hmac.compare_digest(_hash_code(code, state["salt"]), state["hash"]):
+            state["attempts"] += 1
+            save(uid, meta)
+            left = CODE_TRIES - state["attempts"]
+            raise AppError("That code isn't right. %s" % ("%d tries left." % left if left else "Ask for a new one."))
+        if email_in_use(meta["email"]):
+            raise AppError("That email already has a Guardian account. Sign in to it instead.")
+        meta["email_verified"], meta["email_code"] = True, None
+        save(uid, meta)
+        return True
+
+
+def purge_unverified(now=None):
+    """Delete accounts whose email was never confirmed within 24 hours. Returns how many."""
+    now = now or datetime.now()
+    removed = 0
+    for uid in all_users():
+        meta = _read(_dir(uid, "meta.json"), {})
+        if meta.get("email_verified") or not meta.get("created"):
+            continue
+        if now - datetime.fromisoformat(meta["created"]) > timedelta(hours=UNVERIFIED_HOURS):
+            delete_user(uid)
+            removed += 1
+    return removed
+
+
+# ---------- alerts while the app is closed ----------
+
+def add_push(uid, sub):
+    """Remember one device's push subscription (from the browser's PushManager)."""
+    if not isinstance(sub, dict) or not str(sub.get("endpoint", "")).startswith("https://") \
+            or not (sub.get("keys") or {}).get("p256dh") or not (sub.get("keys") or {}).get("auth"):
+        raise AppError("This device couldn't turn on alerts.")
+    clean = {"endpoint": sub["endpoint"][:1000], "keys": {"p256dh": sub["keys"]["p256dh"][:200],
+                                                         "auth": sub["keys"]["auth"][:100]}}
+    with _lock(uid):
+        meta = load(uid)
+        subs = [x for x in meta.get("push", []) if x["endpoint"] != clean["endpoint"]]
+        meta["push"] = (subs + [clean])[-10:]
+        save(uid, meta)
+
+
+def notify(uid, title, body, sender=None):
+    """Push to every device this person turned alerts on for; forget devices that unsubscribed."""
+    meta = load(uid)
+    if not meta.get("push"):
+        return 0
+    if sender is None:
+        try:
+            import push
+            sender = push.send
+        except ImportError:  # pywebpush not installed: no push
+            return 0
+    keep, sent = [], 0
+    for sub in meta["push"]:
+        result = sender(sub, title, body)
+        if result != "gone":
+            keep.append(sub)
+        sent += result == "ok"
+    if len(keep) != len(meta["push"]):
+        with _lock(uid):
+            meta = load(uid)
+            meta["push"] = keep
+            save(uid, meta)
+    return sent
 
 
 # ---------- set up once ----------
@@ -433,6 +570,10 @@ def run_for(uid):
             meta = load(uid)
             meta["last_run"], meta["last_error"] = _now(), None
             save(uid, meta)
+            if s and s.get("new_threats"):
+                n = s["new_threats"]
+                # Never message text in a push: just that there is something to look at.
+                notify(uid, "Guardian", "Guardian found %d new thing%s. Tap to see." % (n, "" if n == 1 else "s"))
             return s
         except Exception as e:  # one person's failure must not stop the worker
             meta = load(uid)
@@ -458,9 +599,11 @@ def worker_ok(now=None):
 
 
 def check_everyone():
+    purge_unverified()
     for uid in all_users():
         try:
-            if load(uid).get("setup_done"):
+            meta = load(uid)
+            if meta.get("setup_done") and meta.get("email_verified"):
                 run_for(uid)
                 retention(uid)
         except AppError:

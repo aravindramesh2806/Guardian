@@ -109,6 +109,7 @@ async function call(path, body) {
     body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (res.status === 403 && data.step_up) { await stepUp(); return call(path, body); }
+  if (res.status === 403 && data.verify_email) { verifyEmail(me && me.email); throw new Error(data.error); }
   if (!res.ok) throw new Error(data.error || "Something went wrong. Please try again.");
   return data;
 }
@@ -122,8 +123,8 @@ async function passkeyGet(begin, finish) {
 }
 const stepUp = () => passkeyGet("/api/stepup/begin", "/api/stepup/finish");
 
-async function register(name) {
-  const { flow, options } = await call("/api/register/begin", { name });
+async function register(name, email) {
+  const { flow, options } = await call("/api/register/begin", { name, email });
   options.challenge = unb64u(options.challenge);
   options.user.id = unb64u(options.user.id);
   (options.excludeCredentials || []).forEach((c) => (c.id = unb64u(c.id)));
@@ -171,6 +172,7 @@ async function start() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   try { me = await call("/api/me"); } catch (e) { return show(errorBox(e.message)); }
   if (!me.signed_in) return welcome();
+  if (!me.email_verified) return verifyEmail(me.email);
   const s = setupState();
   if (!me.setup_done) return SETUP[s.step && s.step !== "sample" ? s.step : "verify"]();
   if (s.step === "sample") return SETUP.sample();
@@ -233,13 +235,16 @@ function createAccount() {
   const s = setupState();
   const name = el("input", { type: "text", id: "name", autocomplete: "given-name", maxlength: "60", value: s.name || "" });
   name.addEventListener("input", () => saveSetup(Object.assign(setupState(), { name: name.value })));
+  const email = el("input", { type: "email", id: "email", autocomplete: "email", inputmode: "email", maxlength: "254", value: s.email || "" });
+  email.addEventListener("input", () => saveSetup(Object.assign(setupState(), { email: email.value })));
   const err = errorSlot();
   const go = action(el("button", { class: "btn" }, icon("face", 24), "Continue with Face ID"), err, async () => {
     if (!name.value.trim()) throw new Error("Type the name Guardian should use for you.");
-    await register(name.value.trim());
+    if (!email.value.trim()) throw new Error("Type your email, so we can send you a code.");
+    await register(name.value.trim(), email.value.trim());
     me = await call("/api/me");
-    saveSetup(Object.assign(setupState(), { name: name.value.trim(), step: "verify" }));
-    SETUP.verify();
+    saveSetup(Object.assign(setupState(), { name: name.value.trim(), email: email.value.trim(), step: "verify" }));
+    verifyEmail(email.value.trim());
   });
   show(
     topBar(2, s.who === "family" ? handoff : who),
@@ -247,10 +252,67 @@ function createAccount() {
     el("p", { class: "lead" }, "No password to remember. You'll sign in with Face ID, the same way you unlock your phone."),
     el("div", { class: "field mt" }, el("label", { for: "name" }, "What should we call you?"), name,
       el("span", { class: "muted small" }, "Guardian uses this in alerts, so you know they're real.")),
+    el("div", { class: "field mt-s" }, el("label", { for: "email" }, "Your email"), email,
+      el("span", { class: "muted small" }, "We'll send a 6-digit code to check it's yours.")),
     el("div", { class: "mt" }, note("", "info", el("b", {}, "Why no password? "),
       "Passwords can be stolen by the same scams Guardian stops. Face ID can't be typed into a fake website.")),
     el("div", { class: "foot" }, err, go,
       el("p", { class: "muted small center" }, "Your phone may offer fingerprint or its PIN instead. Both are fine.")));
+}
+
+// The emailed 6-digit code. Nothing else works until it's entered (the server enforces this too).
+function verifyEmail(address) {
+  const code = el("input", { type: "text", id: "code", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6", pattern: "[0-9]*" });
+  const err = errorSlot(), info = el("div", { "aria-live": "polite" });
+  const go = action(el("button", { class: "btn" }, "Confirm"), err, async () => {
+    if (!/^\d{6}$/.test(code.value.trim())) throw new Error("Type the 6 digits from the email.");
+    await call("/api/email/verify", { code: code.value.trim() });
+    me = await call("/api/me");
+    SETUP.verify();
+  });
+  code.addEventListener("keydown", (e) => { if (e.key === "Enter") go.click(); });
+  const resend = action(el("button", { class: "link" }, "Send me a new code"), err, async () => {
+    await call("/api/email/resend", {});
+    info.replaceChildren(note("soft", "mail", "A new code is on its way."));
+  });
+  const other = action(el("button", { class: "link" }, "Use a different email"), err, async () => {
+    await call("/api/logout", {}); me = null; createAccount();
+  });
+  show(
+    topBar(2),
+    el("h1", {}, "Check your email"),
+    el("p", { class: "lead" }, "We sent a 6-digit code to ", el("b", {}, address || "your email"), ". Enter it to finish signing up."),
+    el("div", { class: "field mt" }, el("label", { for: "code" }, "6-digit code"), code),
+    el("p", { class: "muted small mt-s" }, "Can't find it? Check your spam folder. Accounts that aren't confirmed are deleted after 24 hours."),
+    info,
+    el("div", { class: "foot" }, err, go, resend, other));
+  code.focus();
+}
+
+// Alerts while Guardian is closed (Web Push). Returns true when this device is subscribed.
+async function turnOnAlerts() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    throw new Error(/iPhone|iPad/.test(navigator.userAgent)
+      ? "On iPhone, first add Guardian to your Home Screen (Share, then Add to Home Screen), then open it from there and try again."
+      : "This browser can't receive alerts while Guardian is closed.");
+  }
+  if (await Notification.requestPermission() !== "granted") throw new Error("Alerts are blocked. You can allow them in your browser or phone settings.");
+  const reg = await navigator.serviceWorker.ready;
+  const { key } = await call("/api/push/key");
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(key) });
+  await call("/api/push/subscribe", { subscription: sub.toJSON() });
+  return true;
+}
+
+function alertsCard() {
+  const out = el("div", { "aria-live": "polite" });
+  const btn = action(el("button", { class: "btn2" }, icon("bell"), "Turn on alerts on this device"), out, async () => {
+    await turnOnAlerts();
+    out.replaceChildren(note("soft", "check", "Alerts are on for this device. We just sent a test."));
+  });
+  return el("div", { class: "card stack g10" },
+    el("p", { class: "muted" }, "Get a heads-up even when Guardian is closed. Alerts say how many new things there are, never what your messages say."),
+    out, btn);
 }
 
 // ---------- setup, after the account exists ----------
@@ -370,9 +432,14 @@ const SETUP = {
       el("button", { class: "link", onclick: finish }, "Continue without alerts for now"));
     const sendButton = (label) => action(el("button", { class: "btn" }, icon("bell"), label), err, async () => {
       if (!canNotify) return missing();
-      if (Notification.permission === "default") await Notification.requestPermission();
-      const a = await call("/api/test-alert", {});
-      if (!(await notify(a.title, a.body))) return missing();
+      // Best: turn on real alerts for this device; the server sends a test push. Otherwise a local practice alert.
+      let pushed = false;
+      try { pushed = await turnOnAlerts(); } catch (e) { pushed = false; }
+      if (!pushed) {
+        if (Notification.permission === "default") await Notification.requestPermission();
+        const a = await call("/api/test-alert", {});
+        if (!(await notify(a.title, a.body))) return missing();
+      }
       foot.replaceChildren(err, el("p", { class: "ask" }, "Did it show up on your lock screen or in your notifications?"),
         el("button", { class: "btn", onclick: finish }, "Yes, I got it"),
         el("button", { class: "link", onclick: missing }, "No, it didn't arrive"));
@@ -593,6 +660,7 @@ function render() {
     source ? el("h2", {}, "Your email") : null, source,
     el("h2", {}, "How Guardian helps"), el("div", { class: "row-btns" }, modeBtn("tell", "Just tell me"), modeBtn("act", "Act for me")),
     family ? el("h2", {}, "Who we tell") : null, family,
+    el("h2", {}, "Alerts"), alertsCard(),
     el("h2", {}, "Settings"),
     el("div", { class: "stack g10" },
       act(el("button", { class: "btn2" }, f.paused ? "Resume Guardian's actions" : "Pause Guardian's actions"), () => call("/api/pause", { paused: !f.paused })),
