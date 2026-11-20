@@ -108,3 +108,10 @@ test("parseClaim reads plain JSON, a JWT body, and refuses an encrypted JWE", ()
   assert.strictEqual(parseClaim(jwt), "failed");
   assert.throws(() => parseClaim("a.b.c.d.e"), /encrypted/);
 });
+
+test("with no output file (the web app) the result is returned and nothing is written", async () => {
+  const persona = stub();
+  const v = createVerifier({ persona, outFile: null });
+  const { sessionId } = await v.start();
+  assert.deepStrictEqual(await v.finish(sessionId), { result: "passed" });
+});

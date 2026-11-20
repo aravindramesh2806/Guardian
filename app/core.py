@@ -239,6 +239,23 @@ def test_alert(uid):
                     "one thing to do. Nothing to do for this one."}
 
 
+# ---------- Persona ----------
+
+def set_claim(uid, result):
+    """Keep a Persona live-human result for this person, in their store (it counts for 24 hours)."""
+    if result not in ("passed", "failed"):
+        raise AppError("Persona did not give a clear answer. Please try again.")
+    st.save_claim(_store(uid), "live_human_presence", result, _now(), "Persona Relay")
+
+
+def verification(uid):
+    c = st.claim(_store(uid))
+    if not c:
+        return {"result": "not checked", "checked_at": None, "fresh": False}
+    return {"result": c["result"], "checked_at": c["checked_at"],
+            "fresh": c["result"] == "passed" and respond.claim_fresh(c, _now())}
+
+
 # ---------- checking ----------
 
 def _store(uid):
@@ -336,6 +353,7 @@ def feed(uid):
         "family": meta.get("family"), "data_source": meta["data_source"], "last_run": meta.get("last_run"),
         "last_error": meta.get("last_error"), "checking": worker_ok(),
         "test_alert_at": meta.get("test_alert_at"), "needs_you": needs_you, "items": items,
+        "verified": verification(uid),
     }
 
 

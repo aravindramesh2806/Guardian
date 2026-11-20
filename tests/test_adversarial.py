@@ -4,7 +4,7 @@ import os
 import time
 import unittest
 
-from agent import audit, detect, evaluate, models
+from agent import audit, detect, evaluate, models, respond
 from agent import run as runner
 from tests.test_guardian import Base
 
@@ -90,6 +90,34 @@ class Failures(Base):
         label, by = models.classify("anything")
         self.assertEqual(label, "suspicious")
         self.assertIn("model error", by)
+
+
+class CrashSafety(Base):
+    def test_a_crash_mid_action_is_never_repeated_blindly(self):
+        original = respond.act
+
+        def crash(action, *a, **k):
+            if action["type"] == "quarantine":
+                raise KeyboardInterrupt  # stands in for the process dying part-way through
+            return original(action, *a, **k)
+        respond.act = crash
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_once()
+        finally:
+            respond.act = original
+        r = self.by_key(self.run_once())
+        q = next(a for a in r["phishing:m-101"]["actions"] if a["action"] == "quarantine")
+        self.assertEqual(q["status"], "waiting for you")
+        self.assertIn("stopped part-way", q["reason"])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "outbox", "quarantine.jsonl")))
+
+    def test_a_claim_in_the_store_wins_over_the_file(self):
+        from agent import store as st
+        self.edit("verification.json", result="failed")
+        st.save_claim(self.store, "live_human_presence", "passed", "2026-11-20T09:00:00", "Persona Relay sandbox")
+        r = self.by_key(self.run_once())
+        self.assertIn("locked", self.status(r["charge:tx-4"], "lock_card"))
 
 
 class SecondLook(Base):

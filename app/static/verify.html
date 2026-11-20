@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify it's you</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top"><img src="/icon.svg" alt="" width="36" height="36"><span class="brand">Guardian</span></header>
+<main>
+  <h1>Verify it's you</h1>
+  <p>Persona checks that a real person is behind Guardian. Guardian only learns <b>passed</b> or <b>failed</b>.
+     It never sees your ID or face. The check lasts 24 hours.</p>
+  <div id="relay-container" class="card"></div>
+  <p id="status" role="status" aria-live="polite" class="muted">Starting…</p>
+  <button id="again" class="secondary" hidden>Try again</button>
+  <a class="button secondary" href="/">Back to Guardian</a>
+</main>
+<script src="/persona-relay.js"></script>
+<script src="/verify.js"></script>
+</body>
+</html>

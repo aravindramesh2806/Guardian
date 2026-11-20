@@ -208,7 +208,7 @@ What it means:
 - **Not yet good enough at new scams:** the 100% on the dev set is the rules learning those cases. On
   scams phrased differently (benefits-card, "reply with the code", "press 1 for a refund", mailbox-full,
   prize and lottery fees), keyword rules catch 20 to 44%.
-- **Model second look, measured:** with Superlinked's `Qwen/Qwen3.5-4B` (about 0.5 s a message), held-out recall goes from 44% / 20% to 100% / 100%, still with zero actions on legitimate items. Cost: unneeded alerts on the dev set rise from 6 / 4 to 10 / 8 (it also flags the real delivery text and a "final notice" sale). Caveat: the held-out scams were written by the same author as the rules; a set written by someone else, and shadow mode on real mail, are the real test.
+- **Model second look, measured:** with Superlinked's `Qwen/Qwen3.5-4B` (about 0.5 s a message), held-out recall goes from 44% / 20% to 100% / 100%, still with zero actions on legitimate items. Cost: unneeded alerts on the dev set rise from 6 / 4 to 10 / 8 (it also flags the real delivery text and a "final notice" sale). Gemma 4 31B on the same sets: also 100% everywhere and 0 actions on legit, unneeded alerts 8 / 6 (dev) and 2 / 2 (held-out), much slower; Qwen kept. Caveat: the held-out scams were written by the same author as the rules; a set written by someone else, and shadow mode on real mail, are the real test.
 - **Next for recall:** a language model on every message from an unknown sender (SIE, raise-only, as L1
   requires), measured on the held-out set and a fresh set written by someone who has not read the rules.
   Real recall is only known from shadow mode on real mail.
@@ -244,8 +244,10 @@ Nothing in this table blocks the dummy tests. Those can start now on fictional d
   "This was real", approve with a fresh passkey check, Pause, Delete), 6 (background worker and
   "checks aren't running" warning).
 - Partly done: 4 (notifications while the app is open; push while it is closed needs HTTPS and VAPID).
+- Done since: Persona inside the app (per-person pass in the store, 24 hours); 8 in part (Persona claim
+  kept in the store; an action is marked started before it runs, so a crash never repeats it).
 - Open: 3 (Gmail; needs the Google project), 7 (encryption at rest, retention, privacy page), 8 (SPF,
-  DKIM and DMARC; Persona claim kept in the store; started-before-acting marker).
+  DKIM and DMARC: needs real email headers).
 
 ## 8. Order of work
 
