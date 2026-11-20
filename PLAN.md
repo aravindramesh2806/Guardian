@@ -246,8 +246,10 @@ Nothing in this table blocks the dummy tests. Those can start now on fictional d
 - Partly done: 4 (notifications while the app is open; push while it is closed needs HTTPS and VAPID).
 - Done since: Persona inside the app (per-person pass in the store, 24 hours); 8 in part (Persona claim
   kept in the store; an action is marked started before it runs, so a crash never repeats it).
-- Open: 3 (Gmail; needs the Google project), 7 (encryption at rest, retention, privacy page), 8 (SPF,
-  DKIM and DMARC: needs real email headers).
+- Done since: 3 (Gmail connector: read-only sign-in with PKCE, sync, token refresh, revoke, shadow mode;
+  tested against a fake Google, waiting for the real Google project), 7 (per-person encryption sealed by a
+  master key, 30-day retention of mail and logs, crypto-shredding on delete, privacy page).
+- Open: 8 (SPF, DKIM and DMARC: needs real email headers), push while the app is closed (HTTPS), real SMS.
 
 ## 8. Order of work
 

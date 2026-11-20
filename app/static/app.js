@@ -156,9 +156,10 @@ function setupWizard() {
   };
 
   const two = () => step(2, "Connect email",
-    el("div", { class: "card" }, el("b", {}, "Gmail: coming next"),
+    el("div", { class: "card" }, el("b", {}, "Gmail, read-only"),
       el("p", { class: "muted" }, "Guardian will read new emails to spot scams. It will never send, delete or change your email without asking."),
-      el("p", { class: "muted small" }, "Until then, Guardian shows you sample data, so you can see how it works.")),
+      el("p", { class: "muted small" }, "You can connect Gmail from your home screen after setup. Until then, Guardian shows sample data so you can see how it works."),
+      el("a", { href: "/privacy" }, "What Guardian reads and keeps")),
     el("button", { onclick: three }, "Continue with sample data for now"),
     el("button", { class: "secondary", onclick: one }, "Back"));
 
@@ -216,8 +217,10 @@ function itemCard(it) {
     : el("span", { class: "tag " + (it.severity === "high" ? "high" : "medium") }, it.severity === "high" ? "Scam or attack" : "Heads up");
   const card = el("div", { class: "card item" }, tag, el("h3", {}, it.summary));
   if (it.did.length && !it.marked_real) card.append(el("p", { class: "did" }, "Guardian: " + it.did.join(" · ")));
+  if (!it.marked_real && (it.would || []).length) card.append(el("p", { class: "muted" },
+    (feedCache && feedCache.shadow ? "Shadow mode. Guardian would have: " : "Paused. Guardian would have: ") + it.would.join(" · ")));
   if (!it.marked_real) it.waiting.forEach((w) => card.append(el("p", { class: "muted" }, "Waiting: " + w)));
-  if (!it.did.length && !it.waiting.length && !it.marked_real) card.append(el("p", { class: "muted" }, "Nothing done by itself. Just letting you know."));
+  if (!it.did.length && !it.waiting.length && !(it.would || []).length && !it.marked_real) card.append(el("p", { class: "muted" }, "Nothing done by itself. Just letting you know."));
   if (it.steps) card.append(el("details", {}, el("summary", {}, "What to do"), el("pre", { class: "steps" }, it.steps)));
   if (!it.marked_real) {
     const real = el("button", { class: "secondary" }, "This was real, not a scam");
@@ -231,8 +234,17 @@ function itemCard(it) {
   return card;
 }
 
+let notice = null;
+{
+  const q = new URLSearchParams(location.search);
+  if (q.get("gmail") === "connected") notice = { ok: true, text: "Gmail connected, in shadow mode." };
+  if (q.get("gmail_error")) notice = { ok: false, text: q.get("gmail_error") };
+  if (notice) history.replaceState(null, "", "/");
+}
+
 function render() {
   const f = feedCache, err = el("div");
+  const banner = notice ? (notice.ok ? el("div", { class: "status ok" }, notice.text) : errorBox(notice.text)) : null;
   const act = (button, fn) => button.addEventListener("click", () => busy(button, async () => {
     try { feedCache = await fn(); render(); } catch (e) { err.replaceChildren(errorBox(e.name === "NotAllowedError" ? "That was cancelled." : e.message)); }
   }));
@@ -273,6 +285,25 @@ function render() {
       catch (e) { err.replaceChildren(errorBox(e.message)); } });
   });
 
+  let source = null;
+  if (f.data_source === "gmail" && f.gmail) {
+    const accounts = el("input", { type: "text", id: "accounts", value: (f.accounts || []).join(", "),
+      placeholder: "e.g. mybank.com, amazon.com" });
+    const save = el("button", { class: "secondary" }, "Save my accounts");
+    act(save, () => call("/api/accounts", { accounts: accounts.value.split(/[\s,]+/).filter(Boolean) }));
+    const off = el("button", { class: "secondary" }, "Disconnect Gmail");
+    act(off, () => call("/api/gmail/disconnect", {}));
+    source = el("div", { class: "card" }, el("span", { class: "tag done" }, "Shadow mode"),
+      el("h3", {}, "Watching " + (f.gmail.email || "your Gmail")),
+      el("p", { class: "muted" }, "Guardian reads new mail and tells you what it would do. It acts on nothing until you're ready. Last sync: " + ago(f.gmail.last_sync) + "."),
+      f.gmail.last_error ? errorBox("Last sync failed: " + f.gmail.last_error) : null,
+      el("label", { for: "accounts" }, "Your bank and main accounts (website addresses)"),
+      el("p", { class: "muted small" }, "Emails pretending to be these get flagged."), accounts, save, off);
+  } else if (f.gmail_available) {
+    source = el("div", { class: "card" }, el("h3", {}, "Connect your Gmail"),
+      el("p", { class: "muted" }, "Read-only: Guardian can't send, delete or move your mail. It starts in shadow mode, saying what it would do without doing it."),
+      el("a", { class: "button", href: "/oauth/google/start" }, "Connect Gmail (read-only)"));
+  }
   const v = f.verified || {};
   const verify = v.fresh ? null : el("div", { class: "card" }, el("span", { class: "tag medium" }, "Quick check"),
     el("h3", {}, v.result === "passed" ? "Your check that it's really you has expired" : "Let Guardian lock a card for you"),
@@ -281,16 +312,19 @@ function render() {
   show(
     el("h1", {}, "Hello, " + f.name),
     statusBox(f), err,
+    banner,
     f.data_source === "sample" ? el("p", { class: "notice" }, "Showing sample data until you connect Gmail.") : null,
+    f.data_source === "none" ? el("p", { class: "notice" }, "Guardian isn't watching any email right now.") : null,
     checkNow,
     needs.length ? el("h2", {}, "Needs you") : null, ...needs, verify,
     el("h2", {}, open.length ? "What Guardian found" : "Nothing new"),
     ...open.map(itemCard),
     done.length ? el("details", {}, el("summary", {}, `You marked ${done.length} as real`), ...done.map(itemCard)) : null,
     el("hr"),
+    source ? el("h2", {}, "Your email") : null, source,
     el("h2", {}, "How Guardian helps"), el("div", { class: "row" }, tell, doIt),
     family ? el("h2", {}, "Who we tell") : null, family,
-    el("h2", {}, "Settings"), pause, signOut, del);
+    el("h2", {}, "Settings"), pause, el("a", { class: "button secondary", href: "/privacy" }, "What Guardian reads and keeps"), signOut, del);
 }
 
 async function home() {

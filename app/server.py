@@ -11,7 +11,10 @@ Security: sign-in is passkeys only (no passwords). Risky changes (approving a di
 from our own origin with a JSON body; the session cookie is HttpOnly and SameSite=Strict.
 """
 import base64
+import hmac
+import html
 import json
+import urllib.parse
 import os
 import secrets
 import sys
@@ -23,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import core  # noqa: E402
+import gmail  # noqa: E402
 from webauthn import (generate_authentication_options, generate_registration_options,  # noqa: E402
                       options_to_json, verify_authentication_response, verify_registration_response)
 from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyCredentialDescriptor,  # noqa: E402
@@ -45,6 +49,8 @@ VERIFY_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-i
 
 sessions = {}   # token -> {"uid", "created", "stepped_up_at"}
 persona_flows = {}  # flow id -> {"uid", "session", "created"}
+oauth_flows = {}    # state -> {"uid", "verifier", "created"}
+REDIRECT_URI = ORIGIN + "/oauth/google/callback"
 flows = {}      # flow id -> {"challenge", "purpose", "name", "user_id", "created", "uid"}
 _state = threading.Lock()
 
@@ -188,7 +194,7 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("%s %s\n" % (self.command, self.path.split("?")[0]))
 
     # -- helpers --
-    def _send(self, code, body, ctype="application/json", cookie=None, csp=None):
+    def _send(self, code, body, ctype="application/json", cookie=None, csp=None, extra_cookie=None):
         raw = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -205,8 +211,39 @@ class Handler(BaseHTTPRequestHandler):
                                  % (cookie, SESSION_SECONDS, secure))
             else:
                 self.send_header("Set-Cookie", "gsid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0%s" % secure)
+        if extra_cookie:
+            self.send_header("Set-Cookie", extra_cookie)
         self.end_headers()
         self.wfile.write(raw)
+
+    def _oauth_cookie(self, state):
+        """Ties a Google sign-in to the browser that started it. Lax, because a Strict cookie is not sent on
+        Google's cross-site redirect back; scoped to the callback path and gone after 10 minutes."""
+        secure = "; Secure" if ORIGIN.startswith("https://") else ""
+        return "goauth=%s; HttpOnly; SameSite=Lax; Path=/oauth/google/callback; Max-Age=%d%s" % (
+            state, 600 if state else 0, secure)
+
+    def _cookie(self, name):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == name:
+                return v
+        return ""
+
+    def _redirect(self, url, extra_cookie=None):
+        self.send_response(302)
+        self.send_header("Location", url)
+        if extra_cookie:
+            self.send_header("Set-Cookie", extra_cookie)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _bounce(self, url):
+        """Move on with a same-site navigation, so the Strict session cookie is sent again."""
+        page = ('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=%s">'
+                '<title>Guardian</title><p>One moment…</p>' % html.escape(url, quote=True))
+        self._send(200, page.encode(), STATIC_TYPES[".html"], extra_cookie=self._oauth_cookie(""))
 
     def _session(self):
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -246,6 +283,45 @@ class Handler(BaseHTTPRequestHandler):
             if not s:
                 return self._send(401, {"error": "Please sign in."})
             return self._send(200, core.feed(s["uid"]))
+        if path == "/oauth/google/start":
+            _, s = self._session()
+            if not s:
+                return self._redirect("/")
+            try:
+                url, state, verifier = gmail.auth_url(REDIRECT_URI)
+            except gmail.GmailError as e:
+                return self._redirect("/?gmail_error=" + urllib.parse.quote(str(e)))
+            with _state:
+                now = time.time()
+                for k in [k for k, f in oauth_flows.items() if now - f["created"] > 600]:
+                    oauth_flows.pop(k, None)
+                oauth_flows[state] = {"uid": s["uid"], "verifier": verifier, "created": now}
+            return self._redirect(url, extra_cookie=self._oauth_cookie(state))
+        if path == "/oauth/google/callback":
+            # Google sends the person back here. The Strict session cookie is not sent on this cross-site
+            # return, so the one-time `state` (made by their own session) says who it is.
+            # The state must also match the cookie set in the browser that started this sign-in. Without that,
+            # someone could start a sign-in from their own account and get another person to finish it,
+            # linking that person's Gmail to their account (OAuth login CSRF).
+            q = urllib.parse.parse_qs(self.path.partition("?")[2])
+            state = (q.get("state") or [""])[0]
+            same_browser = bool(state) and hmac.compare_digest(self._cookie("goauth").encode(), state.encode())
+            with _state:
+                flow = oauth_flows.pop(state, None) if same_browser else None
+            if not flow or time.time() - flow["created"] > 600:
+                return self._bounce("/?gmail_error=" + urllib.parse.quote("That sign-in expired. Please try again."))
+            if q.get("error") or not q.get("code"):
+                return self._bounce("/?gmail_error=" + urllib.parse.quote("Gmail wasn't connected."))
+            try:
+                tokens = gmail.exchange_code(q["code"][0], REDIRECT_URI, flow["verifier"])
+                core.connect_gmail(flow["uid"], tokens)
+                core.run_for(flow["uid"])
+            except (gmail.GmailError, core.AppError) as e:
+                return self._bounce("/?gmail_error=" + urllib.parse.quote(str(e)))
+            return self._bounce("/?gmail=connected")
+        if path == "/privacy":
+            with open(os.path.join(STATIC, "privacy.html"), "rb") as f:
+                return self._send(200, f.read(), STATIC_TYPES[".html"])
         if path == "/verify":
             with open(os.path.join(STATIC, "verify.html"), "rb") as f:
                 return self._send(200, f.read(), STATIC_TYPES[".html"], csp=VERIFY_CSP)
@@ -295,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
                     s["stepped_up_at"] = time.time()
                 return self._send(200, {"ok": True})
             stepped_up = time.time() - s["stepped_up_at"] < STEP_UP_SECONDS
-            needs_step_up = path in ("/api/approve", "/api/already-done", "/api/delete") or (
+            needs_step_up = path in ("/api/approve", "/api/already-done", "/api/delete", "/api/gmail/disconnect") or (
                 path in ("/api/mode", "/api/setup") and body.get("mode") == "act" and core.load(uid)["mode"] != "act")
             if needs_step_up and not stepped_up:
                 return self._send(403, {"error": "Please confirm it's you first.", "step_up": True})
@@ -308,6 +384,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, persona_begin(uid))
             if path == "/api/persona/finish":
                 return self._send(200, {"result": persona_finish(uid, body.get("flow"))})
+            if path == "/api/accounts":
+                core.set_accounts(uid, body.get("accounts") or [])
+                return self._send(200, core.feed(uid))
+            if path == "/api/gmail/disconnect":
+                core.disconnect_gmail(uid)
+                return self._send(200, core.feed(uid))
             if path == "/api/family/yes":
                 core.family_said_yes(uid)
                 return self._send(200, {"ok": True})
