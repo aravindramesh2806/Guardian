@@ -32,7 +32,7 @@ def brief_lines(summary):
     if not new:
         # Nothing new, but an approved action may have just run (for example the dispute).
         done = ["- %s -> %s" % (r["summary"], shown(a["status"])) for r in summary["results"] for a in r["actions"]
-                if a["status"].endswith("(simulated)")]
+                if a["status"].endswith(("(simulated)", "(firedrill)"))]
         if done:
             return (["Nothing new since your last check. Done for you since then:"] + done)[:5]
         return ["All clear: nothing new since your last check."]
@@ -43,7 +43,8 @@ def brief_lines(summary):
         ("%d need%s you" % (waiting, "s" if waiting == 1 else "")) if waiting else "nothing needs you",
         (", and your family was told about %d" % family) if family else "")]
     for r in new[:3]:
-        done = [shown(a["status"]) for a in r["actions"] if a["status"].endswith(SIMULATED) and a["action"] != "alert"]
+        done = [shown(a["status"]) for a in r["actions"]
+                if a["status"].endswith(("(simulated)", "(firedrill)")) and a["action"] != "alert"]
         lines.append("- " + r["summary"] + (" -> " + "; ".join(done) if done else ""))
     for r in summary["results"]:
         for a in r["actions"]:
@@ -90,7 +91,11 @@ def gate_badge(summary):
         return ""
     parts = ["%s %s (%s)" % (name, "on" if g["value"] else "off", g["source"].split(" ")[0])
              for name, g in gates.items()]
-    return "<p class='ev'>Gates: %s</p>" % html.escape(" · ".join(parts))
+    line = "<p class='ev'>Gates: %s</p>" % html.escape(" · ".join(parts))
+    sources = summary.get("sources") or {}
+    if sources:
+        line += "<p class='ev'>Sources: %s</p>" % html.escape(" · ".join("%s %s" % kv for kv in sources.items()))
+    return line
 
 
 def messages_html(actions):
@@ -176,6 +181,16 @@ def step_line(row, summary):
 SEVERITY_COLOUR = {"critical": "#9b2c2c", "high": "#c05621", "medium": "#b7791f", "low": "#4a5568"}
 
 
+def banner(summary):
+    """Said once at the top, so the lines below don't each repeat that actions are simulated."""
+    text = ("Demo mode: actions are simulated and written to <code>outbox/</code>. Nothing reaches a real bank, "
+            "phone or inbox. All people, numbers and domains are fictional.")
+    if any(a["status"].endswith("(firedrill)") for r in summary["results"] for a in r["actions"]):
+        text += (" Actions marked <i>(firedrill)</i> ran against Firedrill's synthetic Gmail, Stripe and Slack "
+                 "instead.")
+    return text
+
+
 def severity_counts(summary):
     """'4 critical · 2 high · 3 medium' for the top of the page."""
     counts = {}
@@ -253,11 +268,10 @@ padding:1px 6px;border-radius:4px;margin-right:6px;text-transform:uppercase}
 .trail .ev{margin-left:72px}.why{margin:4px 0}.raw{margin-top:8px}.raw summary{font-size:12px;color:var(--muted)}
 code.cmd{display:inline-block;font-size:13px;color:var(--fg);background:var(--bubble);padding:2px 6px;border-radius:4px}</style>
 </head><body><h1>Guardian</h1>
-<p class="banner">Demo mode: every action is simulated and written to <code>outbox/</code>. Nothing reaches a real
-bank, phone or inbox. All people, numbers and domains are fictional.</p>
+<p class="banner">%s</p>
 <p>%s</p><p class="brief">%s</p>
 <p class="ev">Run %s · data: %s · Persona check: %s</p>%s%s%s</body></html>""" % (
-        severity_counts(summary), html.escape("\n".join(brief_lines(summary))), html.escape(summary["run_id"]),
+        banner(summary), severity_counts(summary), html.escape("\n".join(brief_lines(summary))), html.escape(summary["run_id"]),
         html.escape(summary["store"]), html.escape(str(summary["persona"])), gate_badge(summary),
         "".join(cards), statsig_script(summary, client_key))
     with open(out, "w") as f:

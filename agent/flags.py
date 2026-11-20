@@ -33,6 +33,14 @@ def _statsig(gate, user_id, secret):
     return {"value": out["value"], "rule_id": out.get("rule_id")}
 
 
+# Gates that let Guardian act on its own, and the value that lets it do MORE. Statsig may tighten these
+# (turn an action off, turn the kill switch on), never loosen them past the person's own local setting:
+# a stolen console key must not be able to make Guardian lock cards or file disputes by itself.
+# senior_protection is not here: it only changes how sensitive detection is (the demo flips it).
+LOOSER = {"auto_quarantine": True, "auto_block_numbers": True, "auto_lock_card": True,
+          "notify_trusted_contacts": True, "dispute_needs_approval": False, "kill_switch": False}
+
+
 def local_default(gate, local_gates, profile):
     if gate == "senior_protection":
         return profile.get("protection") == "senior"
@@ -59,6 +67,8 @@ def snapshot(local_gates, profile, user_id="demo-user", check=None):
                 # 2026-11-20: a gate nobody created comes back "off"; trusting that would switch off
                 # protections and let disputes file without approval. Keep the safe local setting.
                 out[gate] = {"value": fallback, "source": "local (not in Statsig)"}
+            elif gate in LOOSER and answer["value"] == LOOSER[gate] and fallback != LOOSER[gate]:
+                out[gate] = {"value": fallback, "source": "local (Statsig may not loosen this)"}
             else:
                 out[gate] = {"value": answer["value"], "source": "statsig"}
         except Exception as e:  # a failed gate check must never stop protection

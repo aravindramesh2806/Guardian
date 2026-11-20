@@ -1,0 +1,13 @@
+{
+  "_note": "Fictional replay of a live scam call, one turn at a time. Used by agent/live.py. The caller is not in Rose's contacts.",
+  "call": {"id": "live-1", "kind": "call", "from": "+1-555-0123", "caller_id": "Unknown"},
+  "turns": [
+    {"t": 2,  "speaker": "caller", "text": "Grandma, it's me."},
+    {"t": 5,  "speaker": "rose",   "text": "Who is this? You sound different."},
+    {"t": 9,  "speaker": "caller", "text": "I'm in trouble, I need help right now."},
+    {"t": 13, "speaker": "rose",   "text": "Oh no. What kind of trouble?"},
+    {"t": 17, "speaker": "caller", "text": "I need bail money today. Please don't tell mom."},
+    {"t": 22, "speaker": "rose",   "text": "How much do you need?"},
+    {"t": 26, "speaker": "caller", "text": "Go buy gift cards and read me the numbers."}
+  ]
+}
