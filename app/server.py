@@ -24,6 +24,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+if __name__ == "__main__":
+    # Run directly: read .env (Persona secret, origin, mail and push settings) before any module reads the
+    # environment, like the agent and the Persona sidecar do. Set variables still win. Tests import this
+    # module and keep their own environment.
+    from agent.run import load_env  # noqa: E402
+    load_env()
+
 import core  # noqa: E402
 import gmail  # noqa: E402
 from webauthn import (generate_authentication_options, generate_registration_options,  # noqa: E402
