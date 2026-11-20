@@ -31,8 +31,8 @@ class ConfirmScam(unittest.TestCase):
         call = item(uid, "+1-555-0100")
         block = fix(call, "block_number")
         self.assertEqual((block["label"], block["can"], block["done"]), ("Block +1-555-0100", True, False))
-        with self.assertRaises(core.AppError):
-            core.approve(uid, block["key"])  # not before the person says it's a scam
+        # In "Just tell me" the block is also offered as a one-tap ask (so an alert's button can run it).
+        self.assertIn(block["key"], {n["key"] for n in core.feed(uid)["needs_you"]})
         core.confirm_scam(uid, call["threat"])
         self.assertTrue(item(uid, "+1-555-0100")["confirmed_scam"])
         self.assertFalse(fix(item(uid, "+1-555-0100"), "block_number")["done"])  # confirming alone does nothing

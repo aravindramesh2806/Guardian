@@ -37,8 +37,9 @@ Read the brief at the top: "8 new threats. 5 stopped for you, 1 needs you, your 
 ## 1:05 – 1:40 And when the scammer calls live (live tab, press Replay)
 "Guardian doesn't only clean up afterwards." The island reads *Guardian is listening*. After "Grandma,
 it's me" the score turns yellow. At "bail money, don't tell mom" it turns red: **Hang up. They are
-asking for money or gift cards.** That lands nine seconds *before* the gift-card ask. It ends with
-*Blocked. Sam (daughter) was told.*
+asking for money or gift cards.** That lands nine seconds *before* the gift-card ask. Guardian warns
+first, then offers the choice: tap **Block this number and hang up**, and it ends with *Blocked. Sam
+(daughter) was told.* ("I know this caller" leaves it unblocked.)
 
 ## 1:40 – 2:25 Why you can trust it (report tab, open one threat's audit trail)
 - The reasons: "caller ID says Example Bank, but the real number is +1-555-0199".

@@ -76,6 +76,13 @@ python3 -m venv .venv && .venv/bin/pip install -r app/requirements.txt
   works until it is entered, and accounts not confirmed within 24 hours are deleted by the worker. One
   confirmed account per email. Sign-ups are limited per address (`GUARDIAN_SIGNUPS_PER_HOUR`, default 10;
   set `GUARDIAN_TRUST_PROXY=1` behind a tunnel so the limit sees real addresses).
+- **Suspected scams: tell first, then act or offer.** Each suspected scam's alert goes out the moment it is
+  found, before Guardian blocks, quarantines or locks anything. The push names the threat and who it's from
+  ("Likely scam voicemail. From +1-555-0100. Don't call back, pay or share a code."), never the message.
+  Buttons: in "Just tell me", **Block number** / **Move out of inbox** / **Lock card** (confirmed with
+  Face ID in the app) and **See details**; in "Act for me", **It was real** (undo) and **See details**;
+  in shadow mode or paused, **See details** only. At most 3 such pushes per check, then "And N more".
+  On a live call, Guardian warns first and then offers **Block this number** or **I know this caller**.
 - **Alerts while the app is closed (Web Push):** Settings > "Turn on alerts on this device". A push only says
   "Guardian found 2 new things", never message text, and is encrypted end to end for that device. On iPhone,
   add Guardian to the Home Screen first (Safari > Share > Add to Home Screen, iOS 16.4+).

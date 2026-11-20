@@ -4,7 +4,7 @@
 // Icons are the only markup set directly, and they come from the constant PATHS table below.
 
 const app = document.getElementById("app");
-let me = null, feedCache = null, pollTimer = null, seenThreats = null, notice = null;
+let me = null, feedCache = null, pollTimer = null, seenThreats = null, notice = null, intent = null;
 
 // ---------- small helpers ----------
 function el(tag, attrs, ...kids) {
@@ -175,7 +175,7 @@ async function start() {
   if (!me.email_verified) return verifyEmail(me.email);
   const s = setupState();
   if (!me.setup_done) return SETUP[s.step && s.step !== "sample" ? s.step : "verify"]();
-  if (s.step === "sample") return SETUP.sample();
+  if (s.step === "sample" && !intent) return SETUP.sample();  // an alert's button goes straight to its screen
   return home();
 }
 
@@ -191,12 +191,12 @@ function welcome() {
   const point = (name, strong, rest) => el("li", {}, el("span", { class: "chip" }, icon(name, 20)), el("span", {}, el("b", {}, strong), " " + rest));
   show(
     el("div", { class: "top" }, el("span", { class: "brand" }, el("span", { class: "mark" }, icon("shield")), "Guardian")),
-    el("h1", { class: "big" }, "A quiet guard for your email, money and family."),
+    el("h1", { class: "big" }, "A quiet guard for your email, accounts, money and identity."),
     el("p", { class: "lead" }, "Guardian watches for scams, speaks up only when it matters, and always shows you why."),
     el("ul", { class: "points" },
       point("clock", "Set it up once.", "About 5 minutes, then nothing to tune."),
       point("eye", "It starts by watching.", "It acts for you only when you say so."),
-      point("people", "Your family can be told", "if a scammer targets you, only if they agree.")),
+      point("people", "Someone you trust can be told", "if a scammer targets you, only if they agree.")),
     el("div", { class: "foot" }, err,
       window.PublicKeyCredential ? el("button", { class: "btn", onclick: who }, "Get started")
         : errorBox("This browser can't use passkeys. Please open Guardian in Safari, Chrome or Edge."),
@@ -214,7 +214,7 @@ function who() {
     el("p", { class: "lead" }, "You can add more people later."),
     el("div", { class: "stack mt" },
       opt("me", "person", "Me", "Protect my own email and accounts."),
-      opt("family", "people", "Someone in my family", "Set it up for a parent or relative. They need to be with you to agree.")),
+      opt("family", "people", "Someone I look out for", "A parent, partner, teenager or friend. They need to be with you to agree.")),
     el("div", { class: "foot" }, note("", "lock", "Guardian never watches someone without their own yes. That's why they set up their own account.")));
 }
 
@@ -333,7 +333,7 @@ const SETUP = {
       el("p", { class: "lead" }, "About 30 seconds, done by Persona. Guardian only learns ", el("b", {}, "passed"), " or ",
         el("b", {}, "failed"), ". It never sees your ID or your face."),
       el("div", { class: "mt" }, status),
-      el("p", { class: "muted small mt-s" }, "Before Guardian may lock a card, text your family, or let you turn protection down, it needs this check from the last 24 hours. A scammer with your phone can\u2019t do those alone."),
+      el("p", { class: "muted small mt-s" }, "Before Guardian may lock a card, text the person you trust, or let you turn protection down, it needs this check from the last 24 hours. A scammer with your phone can\u2019t do those alone."),
       el("div", { class: "foot" },
         el("button", { class: "btn", onclick: SETUP.email }, v.fresh ? "Continue" : "Do this later")));
   },
@@ -394,7 +394,7 @@ const SETUP = {
   mode() {
     const s = setupState(); s.step = "mode";
     if (!s.mode) s.mode = "tell";
-    if (s.senior === undefined) s.senior = s.who === "family";
+    if (s.senior === undefined) s.senior = false;
     saveSetup(s);
     const err = errorSlot();
     const go = action(el("button", { class: "btn" }, "Continue"), err, async () => {
@@ -415,7 +415,7 @@ const SETUP = {
         radio(s.mode, "act", "Act for me, then tell me", "Guardian blocks scam numbers, moves fake emails aside and locks a misused card. Disputes always wait for you.", null, pick)),
       s.mode === "act" ? el("p", { class: "muted small mt-s" }, "You'll confirm this with Face ID. With real Gmail, Guardian only watches at first and tells you what it would have done.") : null,
       el("div", { class: "mt-s" }, switchRow("senior-label", "Extra care for calls and texts",
-        "Speaks up sooner about gift cards, codes and “it's me” calls. Suggested for 65 and over.", s.senior,
+        "Speaks up sooner about gift cards, codes and “it's me” calls. Turn it on if you get a lot of scam calls or want a closer watch.", s.senior,
         () => { saveSetup(Object.assign(setupState(), { senior: !setupState().senior })); SETUP.mode(); })),
       el("div", { class: "foot" }, err, go));
   },
@@ -481,7 +481,7 @@ function hero(f) {
 function itemCard(it, err) {
   const tag = it.marked_real ? el("span", { class: "tag" }, "You said this was real")
     : el("span", { class: "tag " + (it.severity === "high" ? "high" : "medium") }, it.severity === "high" ? "Scam or attack" : "Heads up");
-  const card = el("div", { class: "card item" }, tag, el("h3", { class: "mt-s" }, it.summary));
+  const card = el("div", { class: "card item", "data-threat": it.threat }, tag, el("h3", { class: "mt-s" }, it.summary));
   if (it.did.length && !it.marked_real) card.append(el("p", { class: "did" }, "Guardian: " + it.did.join(" · ")));
   if (!it.marked_real && (it.would || []).length) card.append(el("p", { class: "muted" },
     (feedCache && feedCache.shadow ? "Watch-only. Guardian would have: " : "Paused. Guardian would have: ") + it.would.join(" · ")));
@@ -574,7 +574,7 @@ function render() {
   const v = f.verified || {};
   const verify = v.fresh ? null : el("div", { class: "card" }, el("span", { class: "tag medium" }, "Quick check"),
     el("h3", { class: "mt-s" }, v.result === "passed" ? "Your check that it's really you has expired" : "Quick check that it's really you"),
-    el("p", { class: "muted" }, "Before Guardian may lock a card or text your family, Persona checks that a real person is behind it. Guardian only learns passed or failed, never your ID or face. It lasts 24 hours."),
+    el("p", { class: "muted" }, "Before Guardian may lock a card or text the person you trust, Persona checks that a real person is behind it. Guardian only learns passed or failed, never your ID or face. It lasts 24 hours."),
     el("a", { class: "button secondary mt-s", href: "/verify" }, "Verify with Persona"));
 
   const open = f.items.filter((i) => !i.marked_real), done = f.items.filter((i) => i.marked_real);
@@ -671,7 +671,7 @@ function render() {
 async function home() {
   try { feedCache = await call("/api/feed"); } catch (e) { return welcome(); }
   seenThreats = new Set(feedCache.items.map((i) => i.threat));
-  render();
+  if (!openFromAlert()) render();
   clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     try {
@@ -690,7 +690,58 @@ async function home() {
   const q = new URLSearchParams(location.search);
   if (q.get("gmail") === "connected") notice = { ok: true, text: "Gmail connected. Guardian starts by only watching." };
   if (q.get("gmail_error")) notice = { ok: false, text: q.get("gmail_error") };
-  if (notice) history.replaceState(null, "", "/");
+  // From an alert's buttons: act (block, move aside, lock), undo ("It was real") or read (see details).
+  for (const kind of ["act", "undo", "read"]) if (q.get(kind)) intent = { kind, threat: q.get(kind) };
+  if (notice || intent) history.replaceState(null, "", "/");
+}
+
+// Open the screen an alert button asked for. Returns true when it showed one.
+function openFromAlert() {
+  if (!intent) return false;
+  const { kind, threat } = intent;
+  intent = null;
+  const it = feedCache.items.find((i) => i.threat === threat);
+  if (!it) { notice = { ok: true, text: "That one is no longer on your list. It may already be handled." }; return false; }
+  if (kind === "act" && !it.marked_real) {
+    // Tapping "Block number" (or move aside, lock) on the alert means they think it's a scam.
+    call("/api/scam", { threat }).then((f) => { feedCache = f; solve(threat); }).catch(() => solve(threat));
+    return true;
+  }
+  if (kind === "undo" && !it.marked_real) { wasItReal(it); return true; }
+  if (kind === "read") {
+    render();
+    const card = app.querySelector('[data-threat="' + CSS.escape(threat) + '"]');
+    if (card) {
+      card.classList.add("focus");
+      const d = card.querySelector("details");
+      if (d) d.open = true;
+      card.scrollIntoView({ block: "center" });
+    }
+    return true;
+  }
+  return false;
+}
+
+function wasItReal(it) {
+  const err = errorSlot();
+  const back = () => render();
+  show(
+    topBar(null, back),
+    el("h1", {}, "Was this real?"),
+    el("p", { class: "lead" }, it.summary),
+    it.did.length ? el("div", { class: "mt-s" }, note("", "info", "Guardian: " + it.did.join(" · ") + ".")) : null,
+    el("p", { class: "muted mt-s" }, "If it was real, Guardian undoes what it did and won't act on it again."),
+    el("div", { class: "foot" }, err,
+      action(el("button", { class: "btn" }, "Yes, it was real"), err, async () => {
+        const r = await call("/api/real", { threat: it.threat });
+        feedCache = r.feed;
+        notice = { ok: true, text: r.undone.length ? "Guardian undid: " + r.undone.join(", ") + "." : "Noted. Guardian won't act on it." };
+        render();
+      }),
+      action(el("button", { class: "btn2" }, "No, it was a scam"), err, async () => {
+        feedCache = await call("/api/scam", { threat: it.threat });
+        solve(it.threat);
+      })));
 }
 
 start();

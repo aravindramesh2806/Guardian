@@ -284,8 +284,11 @@ def add_push(uid, sub):
         save(uid, meta)
 
 
-def notify(uid, title, body, sender=None):
-    """Push to every device this person turned alerts on for; forget devices that unsubscribed."""
+def notify(uid, title, body, data=None, sender=None):
+    """Push to every device this person turned alerts on for; forget devices that unsubscribed.
+
+    `data` rides along to the device: which threat it is and which buttons to show.
+    """
     meta = load(uid)
     if not meta.get("push"):
         return 0
@@ -297,7 +300,7 @@ def notify(uid, title, body, sender=None):
             return 0
     keep, sent = [], 0
     for sub in meta["push"]:
-        result = sender(sub, title, body)
+        result = sender(sub, title, body, data)
         if result != "gone":
             keep.append(sub)
         sent += result == "ok"
@@ -307,6 +310,45 @@ def notify(uid, title, body, sender=None):
             meta["push"] = keep
             save(uid, meta)
     return sent
+
+
+MAX_SCAM_PUSHES = 3  # per check; anything beyond goes into one "and N more" push
+
+
+def scam_alert(threat, mode, hands_off):
+    """The push for one suspected scam: (title, body, buttons). Says who it's from, never the message itself.
+
+    "Just tell me": the first button does the protective step (block, move aside, lock) after a Face ID check.
+    "Act for me": Guardian is already doing it, so the first button undoes it ("It was real").
+    Shadow mode or paused (`hands_off`): Guardian does nothing, so the only button is "See details".
+    """
+    ev, kind = threat["evidence"], threat["kind"]
+    act = None
+    if kind == "scam_call":
+        what = {"sms": "text", "voicemail": "voicemail"}.get(ev.get("kind"), "call")
+        title = "Likely scam %s" % what
+        body = "From %s. Don't call back, pay or share a code." % ev.get("from", "an unknown number")
+        act = "Block number"
+    elif kind == "phishing":
+        title, body, act = "Likely fake email", "From %s. Don't click its links." % ev.get("from", "a stranger"), "Move out of inbox"
+    elif kind == "takeover":
+        title = "Someone tried to get into your %s account" % ev.get("account", "")
+        body = "If it wasn't you, change your password. Don't use links in that email."
+    elif kind == "card_misuse":
+        title = "Charge you may not recognise"
+        body = "$%.2f at %s." % (ev.get("amount", 0), ev.get("merchant", "a new merchant"))
+        act = "Lock card"
+    else:
+        title, body = "Guardian: heads up", "Tap to see what Guardian found."
+    buttons = []
+    if act and not hands_off:
+        if mode == "act" and not (kind == "card_misuse" and ev.get("small")):
+            body += " Guardian is acting on it now."
+            buttons.append({"action": "undo", "title": "It was real"})
+        else:
+            buttons.append({"action": "act", "title": act})
+    buttons.append({"action": "read", "title": "See details"})
+    return title, body, buttons
 
 
 # ---------- set up once ----------
@@ -565,15 +607,28 @@ def run_for(uid):
                 data_dir = os.path.join(work, "data")
                 shutil.copytree(_dir(uid, "data"), data_dir)
                 _write(os.path.join(data_dir, "inbox.json"), inbox)
+            pushed = {"scams": 0, "more": 0}
+            hands_off = bool(meta.get("paused") or meta.get("shadow"))
+
+            def on_alert(threat):
+                # Called the moment a threat's alert goes out, before any block, quarantine or lock.
+                if threat["severity"] != "high" or pushed["scams"] >= MAX_SCAM_PUSHES:
+                    pushed["more"] += 1
+                    return
+                title, body, buttons = scam_alert(threat, meta["mode"], hands_off)
+                notify(uid, title, body, {"threat": threat["key"], "actions": buttons})
+                pushed["scams"] += 1
+
             s = runner.run(data_dir=data_dir, run_dir=_dir(uid, "runs"), outbox_dir=_dir(uid, "outbox"),
-                           store=_store(uid), now=_now(), user_id=uid)
+                           store=_store(uid), now=_now(), user_id=uid, on_alert=on_alert)
             meta = load(uid)
             meta["last_run"], meta["last_error"] = _now(), None
             save(uid, meta)
-            if s and s.get("new_threats"):
-                n = s["new_threats"]
-                # Never message text in a push: just that there is something to look at.
-                notify(uid, "Guardian", "Guardian found %d new thing%s. Tap to see." % (n, "" if n == 1 else "s"))
+            if pushed["more"]:
+                n = pushed["more"]
+                lead = "And %d more" if pushed["scams"] else "Guardian found %d new"
+                notify(uid, "Guardian", (lead + " thing%s to look at. Tap to see.") % (n, "" if n == 1 else "s"),
+                       {"actions": [{"action": "read", "title": "See details"}]})
             return s
         except Exception as e:  # one person's failure must not stop the worker
             meta = load(uid)
