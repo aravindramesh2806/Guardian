@@ -66,6 +66,12 @@ def handle(threat, ctx):
                 "marked_real": True}
     for action in respond.decide(threat, ctx["profile"]):
         done = st.action_done(store, action["key"])
+        if done and done["status"] == st.STARTED:
+            # A run stopped in the middle of this action: it may or may not have happened. Never repeat it blindly.
+            outcomes.append({"action": action["type"], "key": action["key"], "status": "waiting for you",
+                             "reason": "Guardian stopped part-way through this in %s; please check it" % done["run_id"]})
+            log.event("check_history", "check_history", {"action": action["key"]}, done, threat["key"])
+            continue
         if done:
             try:
                 earlier = json.loads(done.get("detail") or "{}")
@@ -73,13 +79,15 @@ def handle(threat, ctx):
                 earlier = {}
             outcomes.append({"action": action["type"], "key": action["key"], "status": "already done in " + done["run_id"],
                              "message": message(earlier)})
-            log.event("check_history", "check_history", {"action": action["key"]}, done, threat["key"])
+            log.event("check_history", "check_history", {"action": action["key"]},
+                      {k: v for k, v in done.items() if k != "detail"}, threat["key"])
             continue
         allowed, reason = respond.guard(action, ctx["gates"], ctx["verification"], ctx["profile"], now,
                                         ctx.get("approved", ()))
         log.event("guard", "guard_" + action["type"], {"action": action["key"]},
                   {"allowed": allowed, "reason": reason}, threat["key"])
         if allowed:
+            st.mark_started(store, action, threat["key"], run_id, now)
             try:
                 result = respond.act(action, threat, ctx["profile"], ctx["outbox_dir"])
             except Exception as e:  # a service outage must not stop the run; the action retries next run
@@ -133,6 +141,9 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
         "profile": detect.load("profile.json", data_dir),
         "verification": detect.load("verification.json", data_dir),
     }
+    stored_claim = st.claim(ctx["store"])
+    if stored_claim:  # a claim kept in the store wins over the file
+        ctx["verification"] = dict(stored_claim)
     ctx["approved"] = st.approved_keys(ctx["store"])
     ctx["real"] = st.marked_real(ctx["store"])
     ctx["flags"] = flags.snapshot(detect.load("gates.json", data_dir), ctx["profile"], check=gate_check)

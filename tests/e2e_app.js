@@ -7,7 +7,14 @@ const dir = process.argv[2];
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 390, height: 844 } });
   const p = await ctx.newPage();
-  const errors = []; p.on('pageerror', e => errors.push(e.message)); p.on('console', m => m.type() === 'error' && errors.push(m.text()));
+  const errors = []; let noSidecar = false;  // on the verify page with no sidecar, one 400 from /api/persona/begin is expected
+  p.on('pageerror', e => errors.push(e.message));
+  p.on('console', m => {
+    if (m.type() !== 'error') return;
+    const url = (m.location() && m.location().url) || '';
+    if (noSidecar && /status of 400/.test(m.text()) && url.endsWith('/api/persona/begin')) return;
+    errors.push(m.text() + (url ? ' (' + url + ')' : ''));
+  });
   const cdp = await ctx.newCDPSession(p);
   await cdp.send('WebAuthn.enable');
   await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal',
@@ -39,6 +46,15 @@ const dir = process.argv[2];
   let t = await text();
   console.log('3 home status:', /You're protected/.test(t) ? "You're protected" : 'MISSING', '| items:', (await p.$$('.card.item')).length,
     '| asks:', await p.locator('.card', { hasText: 'Needs you' }).count(), '| sample notice:', /sample data/.test(t));
+  console.log('   persona card:', await p.getByText('Verify with Persona').count() === 1);
+  noSidecar = true;
+  await p.getByText('Verify with Persona').click();
+  await p.getByText(/isn.t set up on this computer|reach the Persona check/).waitFor();
+  noSidecar = false;
+  console.log('   verify page (no sidecar):', (await p.textContent('#status')).trim());
+  await shot('verify');
+  await p.getByText('Back to Guardian').click();
+  await p.getByText('Hello, Rose').waitFor();
   const ask = p.locator('.card', { hasText: 'Dispute $389.00' });
   await ask.getByText('Yes, do it').click();
   await p.waitForTimeout(1500);
