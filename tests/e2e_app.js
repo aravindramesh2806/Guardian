@@ -1,0 +1,70 @@
+// Browser test of the whole app with a virtual passkey (Chromium WebAuthn emulation).
+// Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots>
+// e.g. GUARDIAN_USERS_DIR=/tmp/g-e2e .venv/bin/python app/server.py &  then  node tests/e2e_app.js /tmp
+const { chromium } = require('playwright');
+const dir = process.argv[2];
+(async () => {
+  const b = await chromium.launch();
+  const ctx = await b.newContext({ viewport: { width: 390, height: 844 } });
+  const p = await ctx.newPage();
+  const errors = []; p.on('pageerror', e => errors.push(e.message)); p.on('console', m => m.type() === 'error' && errors.push(m.text()));
+  const cdp = await ctx.newCDPSession(p);
+  await cdp.send('WebAuthn.enable');
+  await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal',
+    hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+  const shot = async (name) => { await p.screenshot({ path: `${dir}/e2e-${name}.png`, fullPage: true }); };
+  const text = async () => (await p.textContent('main')).replace(/\s+/g, ' ');
+  await p.goto('http://localhost:8800/');
+  await shot('welcome');
+  await p.getByText('Get started').click();
+  await p.fill('#name', 'Rose');
+  await p.getByText('Create my account with Face ID or fingerprint').click();
+  await p.getByText('Step 1 of 5').waitFor();
+  console.log('1 registered with a passkey -> setup step 1');
+  await p.getByText('Continue', { exact: true }).click();
+  await p.getByText('Continue with sample data for now').click();
+  await p.fill('#fname', 'Sam (daughter)'); await p.fill('#fphone', '+1 555 0142');
+  await p.getByText('Continue', { exact: true }).click();
+  await p.getByText('Act for me, then tell me').click();
+  await p.check('#senior');
+  await shot('setup-4');
+  await p.getByText('Continue', { exact: true }).click();
+  await p.getByText('Step 5 of 5').waitFor();
+  await p.getByText('Send me a test alert').click();
+  await p.getByText('This is what a Guardian alert looks like').waitFor();
+  console.log('2 setup done, test alert shown');
+  await p.getByText('Go to my Guardian').click();
+  await p.getByText('Hello, Rose').waitFor();
+  await shot('home');
+  let t = await text();
+  console.log('3 home status:', /You're protected/.test(t) ? "You're protected" : 'MISSING', '| items:', (await p.$$('.card.item')).length,
+    '| asks:', await p.locator('.card', { hasText: 'Needs you' }).count(), '| sample notice:', /sample data/.test(t));
+  const ask = p.locator('.card', { hasText: 'Dispute $389.00' });
+  await ask.getByText('Yes, do it').click();
+  await p.waitForTimeout(1500);
+  t = await text();
+  console.log('4 dispute approved -> still asked:', /Dispute \$389\.00/.test(t));
+  const phish = p.locator('.card.item', { hasText: 'paylinc' });
+  console.log('   phishing card says:', (await phish.locator('.did').textContent()).trim());
+  await phish.getByText('This was real, not a scam').click();
+  await p.getByText(/You marked 1 as real/).waitFor();
+  console.log('5 "This was real" -> moved under "You marked 1 as real"');
+  await p.getByText('Simulate their YES (no SMS account yet)').click();
+  await p.getByText('Agreed to be told about serious scams.').waitFor();
+  await p.getByText("Pause Guardian's actions").click();
+  await p.getByText("Guardian's actions are paused.").waitFor();
+  await shot('paused');
+  console.log('6 family agreed; paused');
+  await p.getByText("Resume Guardian's actions").click();
+  await p.getByText("You're protected.").waitFor();
+  await p.getByText('Sign out').click();
+  await p.getByText('I already use Guardian').click();
+  await p.getByText('Hello, Rose').waitFor();
+  console.log('7 signed out, signed back in with the same passkey');
+  await p.getByText('Delete my data').click();
+  await p.getByText(/Tap again to delete everything/).click();
+  await p.getByText('Get started').waitFor();
+  console.log('8 deleted -> back at welcome');
+  console.log('page errors:', JSON.stringify(errors));
+  await b.close();
+})().catch(e => { console.error('E2E FAILED:', e.message); process.exit(1); });

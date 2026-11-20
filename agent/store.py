@@ -17,6 +17,10 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS actions (
         action_key VARCHAR(128) PRIMARY KEY, threat_key VARCHAR(128), action VARCHAR(32),
         status VARCHAR(64), detail TEXT, run_id VARCHAR(64), created_at VARCHAR(32))""",
+    """CREATE TABLE IF NOT EXISTS approvals (
+        action_key VARCHAR(128) PRIMARY KEY, approved_at VARCHAR(32))""",
+    """CREATE TABLE IF NOT EXISTS feedback (
+        threat_key VARCHAR(128) PRIMARY KEY, label VARCHAR(16), at VARCHAR(32))""",
     """CREATE TABLE IF NOT EXISTS verdicts (
         item_key VARCHAR(128) PRIMARY KEY, label VARCHAR(16), decided_by VARCHAR(128), created_at VARCHAR(32))""",
 ]
@@ -99,6 +103,36 @@ def reset(store):
     store.exec("DELETE FROM actions")
     store.exec("DELETE FROM threats")
     store.exec("DELETE FROM verdicts")
+    store.exec("DELETE FROM approvals")
+    store.exec("DELETE FROM feedback")
+
+
+def approve(store, action_key, at):
+    """The person said yes to a held action (a dispute, or locking a card over a small charge)."""
+    store.exec("DELETE FROM approvals WHERE action_key = %s", (action_key,))
+    store.exec("INSERT INTO approvals (action_key, approved_at) VALUES (%s, %s)", (action_key, at))
+
+
+def approved_keys(store):
+    return {r["action_key"] for r in store.rows("SELECT action_key FROM approvals")}
+
+
+def mark_real(store, threat_key, at):
+    """The person said "this was real": remember it, so Guardian never acts on this threat again."""
+    store.exec("DELETE FROM feedback WHERE threat_key = %s", (threat_key,))
+    store.exec("INSERT INTO feedback (threat_key, label, at) VALUES (%s, %s, %s)", (threat_key, "real", at))
+
+
+def marked_real(store):
+    return {r["threat_key"] for r in store.rows("SELECT threat_key FROM feedback WHERE label = %s", ("real",))}
+
+
+def actions_for(store, threat_key):
+    return store.rows("SELECT action_key, action, status, detail FROM actions WHERE threat_key = %s", (threat_key,))
+
+
+def set_status(store, action_key, status):
+    store.exec("UPDATE actions SET status = %s WHERE action_key = %s", (status, action_key))
 
 
 def verdict_get(store, key):

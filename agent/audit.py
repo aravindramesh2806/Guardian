@@ -39,9 +39,10 @@ def analytics_properties(rec):
 
 
 class AuditLog:
-    def __init__(self, run_dir, run_id):
+    def __init__(self, run_dir, run_id, user_id="demo-user"):
         os.makedirs(run_dir, exist_ok=True)
         self.run_id = run_id
+        self.user_id = user_id  # a random id, never a name or address
         self.path = os.path.join(run_dir, run_id + ".jsonl")
         self.key = os.environ.get("AMPLITUDE_API_KEY", "")
         self.gates = {}  # gate values for this run, attached to every event
@@ -57,7 +58,7 @@ class AuditLog:
 
     def _send_amplitude(self, rec):
         body = {"api_key": self.key, "events": [{
-            "user_id": "demo-user", "event_type": "agent_" + rec["tool"],
+            "user_id": self.user_id, "event_type": "agent_" + rec["tool"],
             "event_properties": analytics_properties(rec), "time": rec["ts"]}]}
         req = urllib.request.Request(AMPLITUDE_URL, data=json.dumps(body, default=str).encode(),
                                      headers={"Content-Type": "application/json"})

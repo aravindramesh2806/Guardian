@@ -37,13 +37,19 @@ def handle(threat, ctx):
         st.save_threat(store, threat, run_id, now)
 
     outcomes = []
+    if threat["key"] in ctx.get("real", ()):
+        # The person said this was real: never act on it again.
+        return {"threat": threat["key"], "kind": threat["kind"], "severity": threat["severity"],
+                "summary": threat["summary"], "evidence": threat["evidence"], "new": is_new, "actions": [],
+                "marked_real": True}
     for action in respond.decide(threat, ctx["profile"]):
         done = st.action_done(store, action["key"])
         if done:
-            outcomes.append({"action": action["type"], "status": "already done in " + done["run_id"]})
+            outcomes.append({"action": action["type"], "key": action["key"], "status": "already done in " + done["run_id"]})
             log.event("check_history", "check_history", {"action": action["key"]}, done, threat["key"])
             continue
-        allowed, reason = respond.guard(action, ctx["gates"], ctx["verification"], ctx["profile"], now)
+        allowed, reason = respond.guard(action, ctx["gates"], ctx["verification"], ctx["profile"], now,
+                                        ctx.get("approved", ()))
         log.event("guard", "guard_" + action["type"], {"action": action["key"]},
                   {"allowed": allowed, "reason": reason}, threat["key"])
         if allowed:
@@ -53,10 +59,15 @@ def handle(threat, ctx):
                 result = {"status": respond.FAILED, "reason": "%s: %s" % (type(e).__name__, str(e)[:120])}
         else:
             result = respond.held(action, threat, ctx["profile"], reason)
+            if action["key"] in ctx.get("approved", ()):
+                # Already approved, but something else still holds it (e.g. no Persona check): don't ask again.
+                result.pop("ask", None)
+                result["reason"] = "you approved it, but " + reason
         log.event("act", "act_" + action["type"], {"action": action["key"]}, result, threat["key"])
         st.save_action(store, action, threat["key"], result, run_id, now)
-        outcomes.append({"action": action["type"], "status": result["status"],
-                         "reason": result.get("reason", reason), "ask": result.get("ask")})
+        outcomes.append({"action": action["type"], "key": action["key"], "status": result["status"],
+                         "reason": result.get("reason", reason), "ask": result.get("ask"),
+                         "text": result.get("text")})
     return {"threat": threat["key"], "kind": threat["kind"], "severity": threat["severity"],
             "summary": threat["summary"], "evidence": threat["evidence"], "new": is_new, "actions": outcomes}
 
@@ -82,18 +93,20 @@ def make_ask(store, now, budget):
     return ask
 
 
-def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None):
+def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None, user_id="demo-user"):
     run_id = "run-" + time.strftime("%Y%m%d-%H%M%S") + "-%04d" % (int(time.time() * 1000) % 10000)
     run_dir = run_dir or os.path.join(ROOT, "runs")
     ctx = {
         "run_id": run_id,
         "now": now or datetime.now().isoformat(timespec="seconds"),
-        "log": AuditLog(run_dir, run_id),
+        "log": AuditLog(run_dir, run_id, user_id),
         "store": store or st.open_store(os.path.join(run_dir, "guardian.sqlite3")),
         "outbox_dir": outbox_dir or os.path.join(ROOT, "outbox"),
         "profile": detect.load("profile.json", data_dir),
         "verification": detect.load("verification.json", data_dir),
     }
+    ctx["approved"] = st.approved_keys(ctx["store"])
+    ctx["real"] = st.marked_real(ctx["store"])
     ctx["flags"] = flags.snapshot(detect.load("gates.json", data_dir), ctx["profile"], check=gate_check)
     ctx["gates"] = flags.values(ctx["flags"])
     ctx["log"].gates = ctx["gates"]

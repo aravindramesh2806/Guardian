@@ -38,6 +38,28 @@ Open the report over http, so the Statsig web SDK works: `python3 -m http.server
 
 Run `agent/run.py` twice: the second run repeats nothing. Delete `runs/` and `outbox/` to start fresh.
 
+## The app (set up once)
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r app/requirements.txt
+.venv/bin/python app/server.py      # open http://localhost:8800 (localhost, not 127.0.0.1: passkeys need it)
+```
+
+- **Sign in with a passkey** (Face ID, Touch ID, Windows Hello or a phone). No passwords.
+- **Five-step setup:** who it's for, email (sample data until Gmail is connected), a trusted person (they must
+  say YES; the app simulates the reply until an SMS account exists), "Just tell me" or "Act for me", and a test alert.
+- **Home screen:** status, what Guardian found and did, what each held action is waiting for, **Needs you**
+  (approve a dispute or card lock), **This was real** (undoes the action and never acts on it again),
+  Pause, Sign out, **Delete my data**.
+- **Always on:** a background worker checks everyone every 5 minutes (`GUARDIAN_CHECK_EVERY`); the app says
+  so if it stops.
+- **Security:** approving, deleting and turning on "Act for me" need a fresh passkey check (5 minutes).
+  Posts must come from the app's own origin; the session cookie is HttpOnly and SameSite=Strict. Each
+  person's data lives in `users/<random id>/` and "Delete my data" removes that folder.
+- **Tests:** `.venv/bin/python -m unittest discover -s tests -t .` and the browser test `tests/e2e_app.js`.
+- **Not yet:** real Gmail, push notifications while the app is closed (needs HTTPS and VAPID keys), real
+  SMS for family consent, and a phone install (needs HTTPS on a real domain).
+
 ## How it works
 
 ```

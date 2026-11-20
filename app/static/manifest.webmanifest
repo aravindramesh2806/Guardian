@@ -1,0 +1,10 @@
+{
+  "name": "Guardian",
+  "short_name": "Guardian",
+  "description": "Your personal security agent: set it up once.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F6F4EE",
+  "theme_color": "#1F4E99",
+  "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
+}

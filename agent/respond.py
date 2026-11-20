@@ -18,6 +18,24 @@ FAILED = "failed, will retry"
 def is_done(status):
     return isinstance(status, str) and status.endswith(DONE_SUFFIXES)
 
+
+UNDO = {"quarantine": "moved back to the inbox", "block_number": "unblocked", "lock_card": "unlocked"}
+
+
+def undo(action_row, outbox_dir):
+    """Reverse one finished action after the person said "this was real". Returns the new status, or None.
+
+    Alerts and family messages cannot be unsent; a filed dispute is withdrawn with the bank.
+    """
+    kind = action_row["action"]
+    if kind == "dispute":
+        _append(outbox_dir, "undo.jsonl", {"action": action_row["action_key"], "undo": "withdraw dispute"})
+        return "dispute withdrawn (simulated undo)"
+    if kind not in UNDO:
+        return None
+    _append(outbox_dir, "undo.jsonl", {"action": action_row["action_key"], "undo": UNDO[kind]})
+    return "%s (simulated undo)" % UNDO[kind]
+
 STEPS = {
     "identity_breach": [
         "Change the password on {domains} today.",
@@ -95,8 +113,11 @@ def claim_fresh(verification, now):
     return timedelta(minutes=-5) <= age <= CLAIM_MAX_AGE
 
 
-def guard(action, gates, verification, profile, now=None):
-    """May this action run now? Returns (allowed, reason). `now` turns on the Persona freshness check."""
+def guard(action, gates, verification, profile, now=None, approved=()):
+    """May this action run now? Returns (allowed, reason).
+
+    `now` turns on the Persona freshness check. `approved` holds the action keys the person said yes to.
+    """
     if action["type"] == "alert":
         return True, "alerts always go to you"
     if gates.get("kill_switch"):
@@ -112,7 +133,7 @@ def guard(action, gates, verification, profile, now=None):
             return False, "family alerts are off"
         return True, "%s agreed to be told about serious scams" % action["contact"]["name"]
     if action["type"] == "lock_card":
-        if action.get("ask_first"):
+        if action.get("ask_first") and action["key"] not in approved:
             return False, "a small charge you may have made: Guardian asks before locking your card"
         if verification.get("result") != "passed":
             return False, "no verified person behind this agent yet (Persona check not passed)"
@@ -125,6 +146,8 @@ def guard(action, gates, verification, profile, now=None):
             return False, "the card issuer has no lock option for agents; call them"
         return True, "verified person, auto-lock on, issuer supports locking"
     if action["type"] == "dispute":
+        if action["key"] in approved:
+            return True, "you approved it"
         if gates.get("dispute_needs_approval", True):
             return False, "disputes wait for your confirmation"
         return True, "auto-dispute is on"

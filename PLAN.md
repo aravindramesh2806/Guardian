@@ -235,6 +235,16 @@ What it means:
 
 Nothing in this table blocks the dummy tests. Those can start now on fictional data.
 
+## Progress on section 5 (2026-11-20)
+
+- Done in the web app (`app/`), tested end to end in a browser with a virtual passkey: 1 (people and
+  workspaces), 2 (setup, with Gmail and SMS steps simulated and labelled), 5 (home screen: undo with
+  "This was real", approve with a fresh passkey check, Pause, Delete), 6 (background worker and
+  "checks aren't running" warning).
+- Partly done: 4 (notifications while the app is open; push while it is closed needs HTTPS and VAPID).
+- Open: 3 (Gmail; needs the Google project), 7 (encryption at rest, retention, privacy page), 8 (SPF,
+  DKIM and DMARC; Persona claim kept in the store; started-before-acting marker).
+
 ## 8. Order of work
 
 1. **Today (demo):**

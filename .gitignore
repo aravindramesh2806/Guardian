@@ -5,3 +5,5 @@ __pycache__/
 node_modules/
 web/report.html
 web/live.html
+.venv/
+users/
