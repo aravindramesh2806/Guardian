@@ -51,6 +51,30 @@ def approve(key, run_dir=None, store=None, now=None):
     return approvals
 
 
+def load_incoming(run_dir):
+    """Calls and texts that arrived during the day (--incoming). Kept beside the runs, like real new data."""
+    path = os.path.join(run_dir, "incoming.json")
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return json.load(f)
+
+
+def receive(path, run_dir=None):
+    """A new call or text arrives: add it to what Guardian will see on this and every later run."""
+    run_dir = run_dir or os.path.join(ROOT, "runs")
+    with open(path) as f:
+        new = json.load(f)
+    new = new.get("calls", []) if isinstance(new, dict) else new
+    have = load_incoming(run_dir)
+    ids = {c["id"] for c in have}
+    have += [c for c in new if c["id"] not in ids]
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "incoming.json"), "w") as f:
+        json.dump(have, f, indent=2)
+    return new
+
+
 def message(result):
     """The message an action sent, if it sent one: who it went to, how, and the text."""
     if result.get("text") and result.get("to"):
@@ -115,7 +139,8 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
     ctx["gates"] = flags.values(ctx["flags"])
     ctx["log"].gates = ctx["gates"]
     ctx["log"].event("gates", "check_gates", {}, ctx["flags"], "run")
-    results = [handle(t, ctx) for t in detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"])]
+    results = [handle(t, ctx) for t in detect.all_threats(
+        data_dir, senior=ctx["gates"]["senior_protection"], extra_calls=load_incoming(run_dir))]
 
     def count(pred):
         return sum(1 for r in results for a in r["actions"] if pred(a))
@@ -139,12 +164,17 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Run Guardian once.")
     parser.add_argument("--approve", metavar="ACTION", help="say yes to a held action first, e.g. dispute:tx-4")
+    parser.add_argument("--incoming", metavar="FILE", help="a call or text arrives first, e.g. demo/incoming_text.json")
     args = parser.parse_args()
     load_env()
+    if args.incoming:
+        for c in receive(args.incoming):
+            print("New %s from %s just arrived. Running Guardian now." % (c["kind"], c["from"]))
     if args.approve:
         approve(args.approve)
         print("Approved %s. Running Guardian now." % args.approve)
     s = run()
+    print("Demo mode: every action below is simulated and written to outbox/.")
     print(json.dumps({k: v for k, v in s.items() if k != "results"}, indent=2))
     for r in s["results"]:
         print("-", r["severity"], r["summary"])

@@ -45,7 +45,7 @@ def breaches(profile, breach_feed, receipts):
     for b in breach_feed:
         hit = sorted(emails & {e.lower() for e in b.get("affected_emails", [])})
         risky = [d for d in b["data_types"] if any(h in d for h in HIGH_RISK_DATA)]
-        severity = "high" if risky else "medium"
+        severity = "medium" if risky else "low"
         if hit:
             out.append(_threat(
                 "identity_breach", "breach:%s:%s" % (b["id"], ",".join(hit)), severity,
@@ -188,7 +188,7 @@ def scam_calls(profile, calls, senior=None):
             verdict = {"phishing": "scam_call", "suspicious": "suspicious"}.get(label)
         if verdict == "scam_call":
             out.append(_threat(
-                "scam_call", "scam:%s" % c["id"], "high",
+                "scam_call", "scam:%s" % c["id"], "critical",
                 "Scam %s from %s (shows as \"%s\")" % (c["kind"], c["from"], c.get("caller_id", "Unknown")),
                 {"call": c["id"], "kind": c["kind"], "from": c["from"], "caller_id": c.get("caller_id"),
                  "at": c["at"], "score": score, "reasons": reasons, "decided_by": model,
@@ -210,7 +210,7 @@ def card_misuse(profile, transactions, receipts):
         if t["merchant"].lower() in usual or (t["merchant"].lower(), round(t["amount"], 2)) in matched:
             continue
         out.append(_threat(
-            "card_misuse", "charge:%s" % t["id"], "high",
+            "card_misuse", "charge:%s" % t["id"], "critical",
             "Unrecognised charge of $%.2f at %s on card ending %s" % (
                 t["amount"], t["merchant"], t["card"].split("-")[-1]),
             {"transaction": t["id"], "card": t["card"], "merchant": t["merchant"], "amount": t["amount"],
@@ -218,18 +218,21 @@ def card_misuse(profile, transactions, receipts):
     return out
 
 
-def all_threats(data_dir=None, senior=None):
-    """Run every detector over the person's data."""
+SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def all_threats(data_dir=None, senior=None, extra_calls=()):
+    """Run every detector over the person's data. `extra_calls` are calls and texts that just arrived."""
     profile = load("profile.json", data_dir)
     receipts = load("receipts.json", data_dir)
     inbox = load("inbox.json", data_dir)
     found = (breaches(profile, load("breaches.json", data_dir), receipts)
              + takeover(profile, inbox)
              + phishing(profile, inbox)
-             + scam_calls(profile, load("calls.json", data_dir), senior)
+             + scam_calls(profile, load("calls.json", data_dir) + list(extra_calls), senior)
              + card_misuse(profile, load("transactions.json", data_dir), receipts))
     # Most urgent first: things a scammer is doing right now, then money, then accounts, then news.
-    severity = {"high": 0, "medium": 1}
+    severity = SEVERITY_ORDER
     urgency = {"scam_call": 0, "card_misuse": 1, "takeover": 2, "phishing": 3, "suspicious": 4,
                "merchant_breach": 5, "identity_breach": 6}
-    return sorted(found, key=lambda t: (severity.get(t["severity"], 2), urgency.get(t["kind"], 9)))
+    return sorted(found, key=lambda t: (severity.get(t["severity"], 4), urgency.get(t["kind"], 9)))

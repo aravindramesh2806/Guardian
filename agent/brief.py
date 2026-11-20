@@ -18,23 +18,32 @@ def latest(run_dir):
         return json.load(f)
 
 
+SIMULATED = " (simulated)"
+
+
+def shown(status):
+    """A status as the person sees it. The page says once that actions are simulated, so lines don't repeat it."""
+    return status[:-len(SIMULATED)] if status.endswith(SIMULATED) else status
+
+
 def brief_lines(summary):
     """Three to five lines a person reads in ten seconds. Only threats new in this run."""
     new = [r for r in summary["results"] if r["new"]]
     if not new:
         # Nothing new, but an approved action may have just run (for example the dispute).
-        done = ["- %s -> %s" % (r["summary"], a["status"]) for r in summary["results"] for a in r["actions"]
+        done = ["- %s -> %s" % (r["summary"], shown(a["status"])) for r in summary["results"] for a in r["actions"]
                 if a["status"].endswith("(simulated)")]
         if done:
             return (["Nothing new since your last check. Done for you since then:"] + done)[:5]
         return ["All clear: nothing new since your last check."]
     family = summary.get("family_told", 0)
-    lines = ["%d new threat%s today. %d stopped for you, %d need%s you%s." % (
+    waiting = summary["waiting_for_you"]
+    lines = ["%d new threat%s today. %d stopped for you, %s%s." % (
         len(new), "" if len(new) == 1 else "s", summary["stopped"],
-        summary["waiting_for_you"], "s" if summary["waiting_for_you"] == 1 else "",
+        ("%d need%s you" % (waiting, "s" if waiting == 1 else "")) if waiting else "nothing needs you",
         (", and your family was told about %d" % family) if family else "")]
     for r in new[:3]:
-        done = [a["status"] for a in r["actions"] if a["status"].endswith("(simulated)") and a["action"] != "alert"]
+        done = [shown(a["status"]) for a in r["actions"] if a["status"].endswith(SIMULATED) and a["action"] != "alert"]
         lines.append("- " + r["summary"] + (" -> " + "; ".join(done) if done else ""))
     for r in summary["results"]:
         for a in r["actions"]:
@@ -156,12 +165,24 @@ def step_line(row, summary):
         if out.get("drafted_by"):
             detail += (" · " if detail else "") + "drafted by %s" % out["drafted_by"]
         return ("Waiting" if out.get("status") == "waiting for you" else "Done",
-                "%s: %s" % (label, out.get("status", "")), [], detail)
+                "%s: %s" % (label, shown(out.get("status", ""))), [], detail)
     if row["step"] == "check_history":
         act = (row.get("inputs") or {}).get("action", "").split(":")[0]
-        return ("Skipped", "Already done in %s: %s" % (out.get("run_id", "an earlier run"), out.get("status", "")),
+        return ("Skipped", "Already done in %s: %s" % (out.get("run_id", "an earlier run"), shown(out.get("status", ""))),
                 [], "checked history for %s" % act)
     return (row["step"], tool, [], "")
+
+
+SEVERITY_COLOUR = {"critical": "#9b2c2c", "high": "#c05621", "medium": "#b7791f", "low": "#4a5568"}
+
+
+def severity_counts(summary):
+    """'4 critical · 2 high · 3 medium' for the top of the page."""
+    counts = {}
+    for r in summary["results"]:
+        counts[r["severity"]] = counts.get(r["severity"], 0) + 1
+    return "".join("<span class='tag' style='background:%s'>%d %s</span> " % (SEVERITY_COLOUR[s], counts[s], s)
+                   for s in SEVERITY_COLOUR if counts.get(s))
 
 
 STEP_COLOUR = {"Spotted": "#2b6cb0", "Allowed": "#2f855a", "Held": "#b7791f", "Done": "#2f855a",
@@ -194,11 +215,11 @@ def report(summary, run_dir, out, client_key=None):
             for line in f:
                 row = json.loads(line)
                 steps.setdefault(row["subject_id"], []).append(row)
-    colour = {"high": "#9b2c2c", "medium": "#b7791f"}
+    colour = SEVERITY_COLOUR
     cards = []
     for r in summary["results"]:
         acts = "".join("<li><b>%s</b>: %s%s</li>" % (
-            html.escape(a["action"]), html.escape(a["status"]),
+            html.escape(ACTION_LABEL.get(a["action"], a["action"])), html.escape(shown(a["status"])),
             (" <i>(%s)</i>" % html.escape(a["reason"])) if a["status"] == "waiting for you" else "")
             for a in r["actions"])
         why = reasons_of(r["evidence"])
@@ -222,6 +243,7 @@ body{font-family:system-ui,sans-serif;margin:0 auto;padding:16px;max-width:880px
 section{border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0}
 h2{font-size:17px}.tag{color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;text-transform:uppercase}
 .ev,code{font-size:12px;color:var(--muted);word-break:break-word}.brief{white-space:pre-line;font-size:16px}
+.banner{font-size:13px;border:1px dashed var(--muted);border-radius:8px;padding:8px 12px;color:var(--muted)}
 .msgs{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0}
 .msg{flex:1 1 260px;max-width:400px;background:var(--bubble);border-radius:14px;padding:10px 14px}
 .msg-head{font-size:12px;color:var(--muted);margin-bottom:4px}.msg-body{white-space:pre-line;font-size:14px}
@@ -230,9 +252,12 @@ h2{font-size:17px}.tag{color:#fff;padding:2px 8px;border-radius:4px;font-size:12
 padding:1px 6px;border-radius:4px;margin-right:6px;text-transform:uppercase}
 .trail .ev{margin-left:72px}.why{margin:4px 0}.raw{margin-top:8px}.raw summary{font-size:12px;color:var(--muted)}
 code.cmd{display:inline-block;font-size:13px;color:var(--fg);background:var(--bubble);padding:2px 6px;border-radius:4px}</style>
-</head><body><h1>Guardian</h1><p class="brief">%s</p>
+</head><body><h1>Guardian</h1>
+<p class="banner">Demo mode: every action is simulated and written to <code>outbox/</code>. Nothing reaches a real
+bank, phone or inbox. All people, numbers and domains are fictional.</p>
+<p>%s</p><p class="brief">%s</p>
 <p class="ev">Run %s · data: %s · Persona check: %s</p>%s%s%s</body></html>""" % (
-        html.escape("\n".join(brief_lines(summary))), html.escape(summary["run_id"]),
+        severity_counts(summary), html.escape("\n".join(brief_lines(summary))), html.escape(summary["run_id"]),
         html.escape(summary["store"]), html.escape(str(summary["persona"])), gate_badge(summary),
         "".join(cards), statsig_script(summary, client_key))
     with open(out, "w") as f:

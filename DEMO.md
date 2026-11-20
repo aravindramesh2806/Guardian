@@ -2,6 +2,7 @@
 
 **Setup before going on stage:** `rm -rf runs outbox && python3 agent/run.py && python3 agent/brief.py`,
 then `python3 -m http.server 8000 -d web` and open <http://localhost:8000/report.html>.
+Starting fresh also clears approvals and the incoming text, so the live beats can be rehearsed.
 Keep a terminal ready for the second run.
 
 ## 0:00 – 0:30 The problem
@@ -12,7 +13,7 @@ text and email, and the agents people use today help them shop and schedule, not
 "Meet Rose, 78. Her daughter Sam worries about her. Guardian is Rose's personal security agent."
 
 ## 0:30 – 1:30 One morning, nine threats
-Show the brief at the top of the report:
+Show the top of the report: the demo-mode banner, then "4 critical · 2 high · 3 medium", then the brief:
 - A voicemail that shows "Example Bank" but comes from the wrong number, asking her to move money to a
   "safe account" and read out a code. **Blocked. Rose warned. Sam told.**
 - "Grandma, it's me, I need bail, buy gift cards, don't tell mom." **Blocked. Sam told.**
@@ -39,6 +40,12 @@ Point at the "Needs you" box on the $389 charge, then run live:
 `python3 agent/run.py --approve dispute:tx-4 && python3 agent/brief.py` and refresh the report.
 0 new threats, nothing repeated, and only that one dispute is filed: "Done for you since then:
 dispute filed." The gate that holds disputes stays on; Rose approved this one, and the audit trail says so.
+
+## Live beat: a new scam arrives on stage
+"While we've been talking, Rose just got a text." Run:
+`python3 agent/run.py --incoming demo/incoming_text.json && python3 agent/brief.py` and refresh.
+The brief reads "1 new threat today. 1 stopped for you, nothing needs you, and your family was told about 1":
+a fake unpaid-toll text with a pay link, blocked, Rose warned, Sam told. Run it once more: nothing repeats.
 
 ## Optional beat: complete the loop (Amplitude + Statsig)
 Turn `senior_protection` off in Statsig, start fresh and rerun: the borderline gift-card voicemail

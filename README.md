@@ -27,7 +27,8 @@ npm install               # Statsig web SDK (only needed to refresh web/vendor/s
 python3 agent/run.py      # detect, decide, act, record
 python3 agent/brief.py    # daily brief + web/report.html
 python3 agent/run.py --approve dispute:tx-4   # say yes to one held action, then run
-python3 -m unittest discover -s tests -t .
+python3 agent/run.py --incoming demo/incoming_text.json   # a new scam text arrives, then run
+python3 -m unittest discover -s tests -t .   # or: npm test
 ```
 
 Open the report over http, so the Statsig web SDK works: `python3 -m http.server 8000 -d web`, then
@@ -36,7 +37,9 @@ Open the report over http, so the Statsig web SDK works: `python3 -m http.server
 Run `agent/run.py` twice: the second run repeats nothing. Held actions (the dispute) wait until the person
 approves that one action with `--approve`; approvals live in `runs/approvals.json`. The report shows each
 message Guardian sent (to the person and to family) and the command to approve anything waiting.
-Delete `runs/` and `outbox/` to start fresh.
+Calls and texts added with `--incoming` live in
+`runs/incoming.json`. Threats are ranked critical (money or a scammer acting now), high (account attacks),
+medium and low (leaks). Delete `runs/` and `outbox/` to start fresh.
 
 ## How it works
 
