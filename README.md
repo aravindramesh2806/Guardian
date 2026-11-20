@@ -31,6 +31,7 @@ python3 agent/live.py     # replay a live scam call + web/live.html (Dynamic Isl
 (cd persona && npm install && npm test)   # Persona Relay sidecar; `node persona/server.js` with PERSONA_API_KEY set
 python3 agent/run.py --approve dispute:tx-4   # say yes to one held action, then run
 python3 agent/run.py --incoming demo/incoming_text.json   # a new scam text arrives, then run
+python3 agent/run.py --already-done quarantine:m-101   # a crash left it part-way and it did happen: never rerun it
 python3 -m unittest discover -s tests -t .   # or: npm test
 python3 agent/evaluate.py [--holdout]   # 30-day synthetic quality bar (PLAN.md section 6)
 ```
