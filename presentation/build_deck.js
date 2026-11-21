@@ -107,8 +107,8 @@ for (const [nm, bg, ink, foot] of [["CONTENT_LIGHT", C.background1, C.text1, C.a
     T(s, chans[i][1], { x: 7.65, y: y - 0.02, w: 5.1, h: 0.36, fontSize: 16, bold: true, color: C.text1 });
     T(s, chans[i][2], { x: 7.65, y: y + 0.34, w: 5.1, h: 0.6, fontSize: 14, color: C.accent6 });
   }
-  card(s, 6.7, 5.75, 6.0, 0.75, "gap", C.accent5);
-  T(s, "Anyone with an inbox, a phone and a card is a target. Today’s personal agents help people shop and schedule. None of them stand guard.", { x: 6.95, y: 5.85, w: 5.6, h: 0.6, fontSize: 15, bold: true, color: C.accent1, valign: "middle" });
+  card(s, 6.7, 5.45, 6.0, 1.05, "gap", C.accent5);
+  T(s, "Anyone with an inbox, a phone and a card is a target. Today’s personal agents help people shop and schedule. None of them stand guard.", { x: 6.95, y: 5.5, w: 5.6, h: 0.95, fontSize: 15, bold: true, color: C.accent1, valign: "middle" });
   s.addNotes("Americans reported about $20.9 billion lost to internet crime in 2025, 26% more than the year before, across more than a million complaints, according to the FBI's IC3 report. This isn't one age group's problem: anyone whose email, phone number and card are out on the internet is a target. People aged 60 and over reported the most, about $7.7 billion of it, but students, professionals and parents get the same calls and phishing emails. The scams come by phone, text and email, and the agents people use today help them shop and schedule, not protect them.");
 
   // ================= 3. Rose + setup =================
