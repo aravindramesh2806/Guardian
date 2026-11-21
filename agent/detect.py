@@ -252,7 +252,7 @@ def scam_calls(profile, calls, senior=None, ask=None):
             verdict = "scam_call" if label == "phishing" else "suspicious"
         if verdict == "scam_call":
             out.append(_threat(
-                "scam_call", "scam:%s" % c["id"], "high",
+                "scam_call", "scam:%s" % c["id"], "critical",
                 "Scam %s from %s (shows as \"%s\")" % (c["kind"], c["from"], c.get("caller_id", "Unknown")),
                 {"call": c["id"], "kind": c["kind"], "from": c["from"], "caller_id": c.get("caller_id"),
                  "at": c["at"], "score": score, "reasons": reasons, "decided_by": model,
@@ -275,7 +275,7 @@ def card_misuse(profile, transactions, receipts):
             continue
         small = t["amount"] < SMALL_CHARGE
         out.append(_threat(
-            "card_misuse", "charge:%s" % t["id"], "medium" if small else "high",
+            "card_misuse", "charge:%s" % t["id"], "medium" if small else "critical",
             ("Did you make this $%.2f charge at %s on card ending %s?" if small
              else "Unrecognised charge of $%.2f at %s on card ending %s") % (
                 t["amount"], t["merchant"], t["card"].split("-")[-1]),
@@ -283,6 +283,9 @@ def card_misuse(profile, transactions, receipts):
              "date": t["date"], "small": small,
              "why": "no receipt matches it and you have not used this merchant before"}))
     return out
+
+
+SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
 # Below this, an unrecognised charge is usually parking, a cafe or a toll: Guardian asks before locking the card
@@ -344,8 +347,10 @@ def second_look(profile, inbox, calls, found, ask):
     return out
 
 
-def all_threats(data_dir=None, senior=None, sources=None, ask=None):
+def all_threats(data_dir=None, senior=None, sources=None, ask=None, extra_calls=()):
     """Run every detector over the person's data. `sources` (a dict) is filled with where each input came from.
+
+    `extra_calls` are calls and texts that just arrived (run.py --incoming).
 
     `ask`, when given, is the model's second look at unknown senders the rules let through (second_look).
     """
@@ -359,13 +364,13 @@ def all_threats(data_dir=None, senior=None, sources=None, ask=None):
     found = (breaches(profile, load("breaches.json", data_dir), receipts)
              + takeover(profile, inbox)
              + phishing(profile, inbox, ask=ask)
-             + scam_calls(profile, load("calls.json", data_dir), senior, ask=ask)
+             + scam_calls(profile, load("calls.json", data_dir) + list(extra_calls), senior, ask=ask)
              + card_misuse(profile, charges, receipts))
-    calls = load("calls.json", data_dir)
+    calls = load("calls.json", data_dir) + list(extra_calls)
     if ask is not None:
         found += second_look(profile, inbox, calls, found, ask)
     # Most urgent first: things a scammer is doing right now, then money, then accounts, then news.
-    severity = {"high": 0, "medium": 1}
+    severity = SEVERITY_ORDER
     urgency = {"scam_call": 0, "card_misuse": 1, "takeover": 2, "phishing": 3, "suspicious": 4,
                "merchant_breach": 5, "identity_breach": 6}
-    return sorted(found, key=lambda t: (severity.get(t["severity"], 2), urgency.get(t["kind"], 9)))
+    return sorted(found, key=lambda t: (severity.get(t["severity"], 4), urgency.get(t["kind"], 9)))

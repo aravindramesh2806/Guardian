@@ -92,7 +92,7 @@ def evaluate(name, seed=7, days=30, workdir=None, variant="dev", use_model=False
         caught = [i for i in threats if flagged.get(i["id"])]
         missed = Counter(i["_case"] for i in threats if not flagged.get(i["id"]))
         weak = Counter(i["_case"] for i in threats
-                       if flagged.get(i["id"]) and all(sev != "high" for _, sev in flagged[i["id"]]))
+                       if flagged.get(i["id"]) and all(sev not in ("critical", "high") for _, sev in flagged[i["id"]]))
         fp_flag = Counter(i["_case"] for i in legit if flagged.get(i["id"]))
         fp_act = Counter("%s -> %s" % (i["_case"], "+".join(sorted(set(acted[i["id"]]))))
                          for i in legit if acted.get(i["id"]))
@@ -126,7 +126,7 @@ def show(r):
     p = r["passes"]
     print("\n== %s (%s set): %d threats, %d legitimate items, %d days" % (
         r["person"], r["variant"], r["items"]["threat"], r["items"]["legit"], r["days"]))
-    print("  %s  threats flagged       %5.1f%%   (bar 90%%; %d of them as high severity)" % (
+    print("  %s  threats flagged       %5.1f%%   (bar 90%%; %d of them as high or critical)" % (
         mark(p["recall_at_least_90pct"]), r["recall"] * 100, r["caught_as_high"]))
     print("  %s  auto actions on legit %5d    (bar 0)" % (mark(p["zero_auto_actions_on_legit"]), r["fp_actions"]))
     print("  %s  alerts per day        %5.2f    (bar under 2; busiest day %d)" % (

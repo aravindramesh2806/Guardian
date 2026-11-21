@@ -30,8 +30,9 @@ python3 agent/brief.py    # daily brief + web/report.html
 python3 agent/live.py     # replay a live scam call + web/live.html (Dynamic Island warning)
 (cd persona && npm install && npm test)   # Persona Relay sidecar; `node persona/server.js` with PERSONA_API_KEY set
 python3 agent/run.py --approve dispute:tx-4   # say yes to one held action, then run
+python3 agent/run.py --incoming demo/incoming_text.json   # a new scam text arrives, then run
 python3 agent/run.py --already-done quarantine:m-101   # a crash left it part-way and it did happen: never rerun it
-python3 -m unittest discover -s tests -t .
+python3 -m unittest discover -s tests -t .   # or: npm test
 python3 agent/evaluate.py [--holdout]   # 30-day synthetic quality bar (PLAN.md section 6)
 ```
 
@@ -42,7 +43,9 @@ Run `agent/run.py` twice: the second run repeats nothing. Held actions (the disp
 approves that one action with `--approve` (or **Needs you** in the app); approvals live in the store, beside the
 threats and actions. The report shows each
 message Guardian sent (to the person and to family) and the command to approve anything waiting.
-Delete `runs/` and `outbox/` to start fresh.
+Calls and texts added with `--incoming` live in
+`runs/incoming.json`. Threats are ranked critical (money or a scammer acting now), high (account attacks and risky leaks),
+medium and low (leaks). Delete `runs/` and `outbox/` to start fresh.
 
 ## The app (set up once)
 
