@@ -61,14 +61,14 @@ class Core(unittest.TestCase):
 
     def test_family_is_not_told_until_they_say_yes(self):
         uid = new_user()
-        self.assertFalse(any("Family told" in i["did"] for i in core.feed(uid)["items"]))
+        self.assertFalse(any("Trusted contact told" in i["did"] for i in core.feed(uid)["items"]))
         core.set_claim(uid, "passed")
         core.send_invite(uid)
         core.run_for(uid)
-        self.assertFalse(any("Family told" in i["did"] for i in core.feed(uid)["items"]))
+        self.assertFalse(any("Trusted contact told" in i["did"] for i in core.feed(uid)["items"]))
         core.family_said_yes(uid)
         core.run_for(uid)
-        self.assertTrue(any("Family told" in i["did"] for i in core.feed(uid)["items"]))
+        self.assertTrue(any("Trusted contact told" in i["did"] for i in core.feed(uid)["items"]))
 
     def invites(self, uid):
         path = os.path.join(USERS_TMP, uid, "outbox", "family_invites.jsonl")

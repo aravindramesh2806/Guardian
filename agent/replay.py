@@ -191,7 +191,7 @@ def main():
             try:
                 before = len(ReplayLog.sink)
                 t = replay(user, name, variant, protection, seed, workdir)
-                print("%-16s %5d events  %3d new threats  %3d stopped  %2d family told  %2d waiting" % (
+                print("%-16s %5d events  %3d new threats  %3d stopped  %2d contact told  %2d waiting" % (
                     user, len(ReplayLog.sink) - before, t["threats_new"], t["stopped"], t["family_told"], t["waiting"]))
             finally:
                 shutil.rmtree(workdir, ignore_errors=True)

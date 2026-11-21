@@ -1,7 +1,9 @@
 # Guardian
 
-A personal security agent that watches a person's digital life every day, acts on threats before they
-cost money, tells their family when something serious happens, and shows the evidence behind every step.
+A personal security agent for anyone with a digital identity: an email address, online accounts, a phone
+number and a card that are out on the internet. It watches that identity every day, acts on threats before
+they cost money, tells someone the person trusts when something serious happens, and shows the evidence
+behind every step.
 
 Built for the Personal Agents Hackathon (tokens&, November 20, 2026). Brief: a personal agent that uses
 reliable context, takes a meaningful action, and shows the information and steps behind what it did.
@@ -10,13 +12,16 @@ reliable context, takes a meaningful action, and shows the information and steps
 
 | Threat | How it is spotted | What Guardian does on its own | What waits for the person |
 |---|---|---|---|
-| Scam calls, voicemails and texts | Spoofed caller ID, requests for gift cards, codes or "safe accounts", secrecy, "it's me, grandma" from unknown numbers, pay-by-link texts | Blocks the number, warns the person with exact steps, tells a trusted family member (with consent) | Nothing |
+| Scam calls, voicemails and texts | Spoofed caller ID, requests for gift cards, codes or "safe accounts", secrecy, "it's me, I'm in trouble" or "new number" from unknown numbers, pay-by-link texts | Blocks the number, warns the person with exact steps, tells a trusted contact (with consent) | Nothing |
 | Card misuse | A charge with no receipt at a merchant they never use | Locks the card (only after a verified-human check) | Confirming the dispute |
 | Account takeover | A reset, sign-in or code email they did not start | Alert with exact steps | Changing the password |
 | Phishing | Lookalike sender, pressure, a link to another domain, a login request | Quarantines the email | Nothing |
 | Data leaks | Their email in a breach, or a breach at a store they bought from | Alert with steps; locks the card used at a breached store | Changing passwords |
 
-Senior protection mode lowers the bar for calls, because older adults are targeted most.
+Guardian is for everyone, at any age: students, busy professionals, parents, retirees. Extra-care mode
+(the `senior_protection` gate) lowers the bar for calls and texts for anyone who wants a closer watch, such
+as someone being actively targeted or new to a channel. It is an opt-in switch in setup, off by default for
+everyone, whatever their age.
 
 ## Run it
 

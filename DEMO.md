@@ -14,18 +14,20 @@ python3 -m http.server 8000 -d web
 ```
 
 Open two tabs: <http://localhost:8000/report.html> and <http://localhost:8000/live.html>. Keep a terminal
-ready for the second run, and the Statsig console open on `senior_protection`.
+ready for the second run, and the Statsig console open on `senior_protection` (extra-care mode).
 
 ## 0:00 – 0:25 The problem
-"People aged 60 and over reported about $7.7 billion lost to fraud in 2025, roughly 60% more than the
-year before, according to AARP's summary of the FBI's internet crime report. The scams come by phone,
-text and email, and the agents people use today help them shop and schedule, not protect them."
+"Americans reported about $20.9 billion lost to internet crime in 2025, 26% more than the year before,
+according to the FBI's IC3 report. If your email, phone number and card are out on the internet, you are a
+target, at any age. The scams come by phone, text and email, and the agents people use today help them
+shop and schedule, not protect them."
 
-"Meet Rose, 78. Her daughter Sam worries about her. Rose set up Guardian once, and it has watched over
+"Guardian is for anyone with a digital identity. Today we follow one of our test people: meet Rose, 78.
+Her daughter Sam is her trusted contact. Rose set up Guardian once, and it has watched over
 her ever since."
 
 ## 0:25 – 1:05 One morning, eight threats (report tab)
-Read the brief at the top: "8 new threats. 5 stopped for you, 1 needs you, your family was told about 3."
+Read the brief at the top: "8 new threats. 5 stopped for you, 1 needs you, someone you trust was told about 3."
 - A voicemail that shows "Example Bank" but comes from the wrong number, asking her to move money to a
   "safe account" and read out a code. **Blocked. Rose warned. Sam told.**
 - "Grandma, it's me, I need bail, buy gift cards, don't tell mom." **Blocked. Sam told.**
@@ -57,7 +59,7 @@ Turn `senior_protection` off in Statsig and rerun: a borderline gift-card voicem
 Show both groups in Amplitude, then turn it back on.
 
 ## 2:45 – 3:00 Close
-"Set it up once. Guardian protects you, tells your family, and shows its work. Next: real Gmail in
+"Set it up once. Guardian protects your identity, tells someone you trust, and shows its work. Next: real Gmail in
 shadow mode, then live calls. Built with Amplitude, Statsig, SingleStore and Persona."
 (Name Superlinked only once SIE is actually wired up.)
 

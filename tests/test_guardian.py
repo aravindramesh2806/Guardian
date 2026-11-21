@@ -216,7 +216,7 @@ class BriefTests(Base):
     def test_brief_is_short_and_leads_with_scams(self):
         lines = brief.brief_lines(self.run_once())
         self.assertLessEqual(len(lines), 5)
-        self.assertIn("family was told about 3", lines[0])
+        self.assertIn("someone you trust was told about 3", lines[0])
         self.assertIn("Scam", lines[1])
         self.assertTrue(any(l.startswith("Needs you: Dispute $389.00") for l in lines))
 

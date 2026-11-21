@@ -684,11 +684,11 @@ def _latest_summary(uid):
 
 
 HEADLINES = {"quarantine": "Moved to quarantine", "block_number": "Number blocked", "lock_card": "Card locked",
-             "dispute": "Dispute filed", "notify_trusted": "Family told"}
+             "dispute": "Dispute filed", "notify_trusted": "Trusted contact told"}
 
 
 FRIENDLY = {"quarantine": "Quarantine", "block_number": "Blocking the number", "lock_card": "Card lock",
-            "dispute": "Dispute", "notify_trusted": "Telling your family"}
+            "dispute": "Dispute", "notify_trusted": "Telling someone you trust"}
 
 # Things Guardian can do about a threat once the person confirms it's a scam. Telling family is not here:
 # that depends only on the family member's own YES.
