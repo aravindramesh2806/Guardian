@@ -754,7 +754,8 @@ def feed(uid):
         waiting = sorted({FRIENDLY.get(a["action"], a["action"]) + ": " + a["reason"] for a in held if a not in stopped})
         for a in r["actions"]:
             if a.get("ask") and a["status"] == "waiting for you":
-                needs_you.append({"key": a["key"], "ask": a["ask"], "threat": r["threat"]})
+                needs_you.append({"key": a["key"], "ask": a["ask"], "threat": r["threat"],
+                                  "stuck": bool(a.get("stuck"))})
         items.append({"threat": r["threat"], "kind": r["kind"], "severity": r["severity"], "summary": r["summary"],
                       "did": did, "would": would, "waiting": waiting, "steps": steps, "marked_real": bool(r.get("marked_real")) or bool(undone),
                       # For "Yes, it's a scam": what Guardian can still do, and the person's own steps.
@@ -796,6 +797,16 @@ def approve(uid, action_key):
         if action_key not in held:
             raise AppError("That request is no longer waiting for you.")
         st.approve(_store(uid), action_key, _now())
+        run_for(uid)
+
+
+def already_done(uid, action_key):
+    """A check stopped part-way through this action and the person found it had happened: never run it again."""
+    with _lock(uid):
+        stuck = {n["key"] for n in feed(uid)["needs_you"] if n.get("stuck")}
+        if action_key not in stuck:
+            raise AppError("That request is no longer waiting for you.")
+        st.confirm_done(_store(uid), action_key)
         run_for(uid)
 
 

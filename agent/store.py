@@ -178,9 +178,26 @@ def threat_seen(store, key):
 
 def action_done(store, key):
     """An action that already ran. Held and failed actions are not 'done', so they run again later."""
-    found = store.rows("SELECT status, run_id FROM actions WHERE action_key = %s AND status <> %s AND status <> %s",
+    found = store.rows("SELECT status, run_id, detail, created_at FROM actions WHERE action_key = %s AND status <> %s AND status <> %s",
                        (key, "waiting for you", "failed, will retry"))
     return found[0] if found else None
+
+
+def waiting(store):
+    """Keys of actions held for the person (including ones a crash left part-way), so --approve can check."""
+    return [r["action_key"] for r in store.rows(
+        "SELECT action_key FROM actions WHERE status = %s OR status = %s", ("waiting for you", STARTED))]
+
+
+def approved_at(store, action_key):
+    found = store.rows("SELECT approved_at FROM approvals WHERE action_key = %s", (action_key,))
+    return found[0]["approved_at"] if found else None
+
+
+def confirm_done(store, action_key):
+    """The person checked a stuck action and it had happened: record it as done, so it never runs again."""
+    store.exec("UPDATE actions SET status = %s WHERE action_key = %s AND status = %s",
+               (CONFIRMED_DONE, action_key, STARTED))
 
 
 def save_threat(store, t, run_id, at):
@@ -189,6 +206,7 @@ def save_threat(store, t, run_id, at):
 
 
 STARTED = "started"
+CONFIRMED_DONE = "done (you confirmed)"
 
 
 def mark_started(store, action, threat_key, run_id, at):

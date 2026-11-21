@@ -80,7 +80,7 @@ class Failures(Base):
         audit.AMPLITUDE_URL = "http://127.0.0.1:9/2/httpapi"  # nothing listens on the discard port
         self.addCleanup(setattr, audit, "AMPLITUDE_URL", original)
         s = self.run_once()
-        self.assertEqual(s["threats"], 8)
+        self.assertEqual(s["threats"], 9)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "runs", s["run_id"] + ".jsonl.errors")))
 
     def test_model_down_falls_back_to_rules(self):
@@ -111,6 +111,61 @@ class CrashSafety(Base):
         self.assertEqual(q["status"], "waiting for you")
         self.assertIn("stopped part-way", q["reason"])
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "outbox", "quarantine.jsonl")))
+
+    def crash_on(self, kind):
+        """Run once with the process dying part-way through the first `kind` action."""
+        original = respond.act
+
+        def crash(action, *a, **k):
+            if action["type"] == kind:
+                raise KeyboardInterrupt
+            return original(action, *a, **k)
+        respond.act = crash
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_once()
+        finally:
+            respond.act = original
+
+    def stuck(self, summary, threat, kind):
+        return next(a for a in self.by_key(summary)[threat]["actions"] if a["action"] == kind)
+
+    def test_a_stuck_action_asks_the_person_and_can_be_approved_again(self):
+        self.crash_on("quarantine")
+        q = self.stuck(self.run_once(), "phishing:m-101", "quarantine")
+        self.assertTrue(q["stuck"])
+        self.assertEqual(q["approve"], "quarantine:m-101")
+        self.assertIn("Check your inbox", q["ask"])
+        # It shows up for --approve, and a yes given after it got stuck tries it once more.
+        runner.approve("quarantine:m-101", run_dir=os.path.join(self.tmp, "runs"), store=self.store,
+                       now="2026-11-20T14:05:00")
+        q = self.stuck(self.run_once(), "phishing:m-101", "quarantine")
+        self.assertEqual(q["status"], "quarantined (simulated)")
+        self.assertIn("already done", self.stuck(self.run_once(), "phishing:m-101", "quarantine")["status"])
+
+    def test_an_approval_from_before_the_crash_does_not_retry_it(self):
+        # The dispute was approved, then Guardian died while filing it: it may already be filed.
+        self.run_once()
+        runner.approve("dispute:tx-4", run_dir=os.path.join(self.tmp, "runs"), store=self.store,
+                       now="2026-11-20T13:00:00")
+        self.crash_on("dispute")
+        d = self.stuck(self.run_once(), "charge:tx-4", "dispute")
+        self.assertEqual(d["status"], "waiting for you")
+        self.assertIn("so it is not filed twice", d["ask"])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "outbox", "disputes.jsonl")))
+
+    def test_already_happened_records_it_as_done_and_never_runs_it(self):
+        self.crash_on("quarantine")
+        runner.already_done("quarantine:m-101", run_dir=os.path.join(self.tmp, "runs"), store=self.store)
+        s = self.run_once()
+        self.assertIn("already done", self.stuck(s, "phishing:m-101", "quarantine")["status"])
+        self.assertEqual(s["waiting_for_you"], 1)  # only the dispute, as on a normal day
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "outbox", "quarantine.jsonl")))
+
+    def test_already_happened_refuses_what_is_not_stuck(self):
+        self.run_once()
+        with self.assertRaises(SystemExit):  # the dispute is waiting, but it did not get stuck
+            runner.already_done("dispute:tx-4", run_dir=os.path.join(self.tmp, "runs"), store=self.store)
 
     def test_a_claim_in_the_store_wins_over_the_file(self):
         from agent import store as st
@@ -145,8 +200,12 @@ class SecondLook(Base):
         r = self.by_key(s)["suspicious:u-1"]
         self.assertEqual([a["action"] for a in r["actions"]], ["alert"])
         self.assertIn("language model", r["evidence"]["reasons"][0])
-        # Even calling every unknown sender a scam, nothing new was quarantined, blocked or locked.
-        self.assertEqual(s["stopped"], 5)
+        # Even calling every unknown sender a scam, the second look quarantined, blocked or locked nothing.
+        # The one extra block is the borderline gift-card voicemail (c-206): the rules flagged it and a model
+        # answer may raise a rule hit (never clear it), as documented in detect.scam_calls.
+        self.assertEqual(s["stopped"], 6)
+        self.assertEqual(self.status(self.by_key(s)["scam:c-206"], "block_number"),
+                         "number +1-555-0999 blocked (simulated)")
         self.assertTrue(asked)
 
     def test_known_senders_and_rule_hits_are_not_sent_to_the_model(self):

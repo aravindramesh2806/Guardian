@@ -26,15 +26,19 @@ shop and schedule, not protect them."
 Her daughter Sam is her trusted contact. Rose set up Guardian once, and it has watched over
 her ever since."
 
-## 0:25 – 1:05 One morning, eight threats (report tab)
-Read the brief at the top: "8 new threats. 5 stopped for you, 1 needs you, someone you trust was told about 3."
+## 0:25 – 1:05 One morning, nine threats (report tab)
+Read the brief at the top: "9 new threats today. 5 stopped for you, 1 needs you, and someone you trust was told about 3."
 - A voicemail that shows "Example Bank" but comes from the wrong number, asking her to move money to a
   "safe account" and read out a code. **Blocked. Rose warned. Sam told.**
 - "Grandma, it's me, I need bail, buy gift cards, don't tell mom." **Blocked. Sam told.**
 - A parcel text with a payment link. **Blocked.**
 - A $389 charge she never made. **Card locked. Dispute waiting for Rose's yes.**
-- A lookalike "PayLinc" refund email. **Quarantined.** Then a bank password reset she didn't ask for, a
-  forum leak, and a breach at a store she used: **exact steps for each.**
+- A lookalike "PayLinc" refund email. **Quarantined.**
+- A bank password reset she didn't ask for, a forum leak with her email, a breach at a store she used.
+  **Exact steps for each.**
+- A vague "call back about your gift card" voicemail. **Flagged as possibly a scam** (senior protection).
+
+Scroll to a scam voicemail: the cards show the exact message Rose got (with steps) and the text Sam got.
 
 ## 1:05 – 1:40 And when the scammer calls live (live tab, press Replay)
 "Guardian doesn't only clean up afterwards." The island reads *Guardian is listening*. After "Grandma,
@@ -51,12 +55,16 @@ first, then offers the choice: tap **Block this number and hang up**, and it end
   concern, never clear it. Remote settings can make Guardian more careful, never less. And analytics
   never see a message, a name or a number."
 
-## 2:25 – 2:45 It never nags twice (terminal)
-Run `python3 agent/run.py`: 0 new threats, nothing repeated, the dispute still waiting.
+## 2:25 – 2:45 Rose says yes, and it never nags twice
+Point at the "Needs you" box on the $389 charge, then run live:
+`python3 agent/run.py --approve dispute:tx-4 && python3 agent/brief.py` and refresh the report.
+0 new threats, nothing repeated, and only that one dispute is filed: "Done for you since then:
+dispute filed." The gate that holds disputes stays on; Rose approved this one, and the audit trail says so.
 
-## Optional beat if time allows: complete the loop (Amplitude + Statsig)
-Turn `senior_protection` off in Statsig and rerun: a borderline gift-card voicemail is no longer caught.
-Show both groups in Amplitude, then turn it back on.
+## Optional beat: complete the loop (Amplitude + Statsig)
+Turn `senior_protection` off in Statsig, start fresh and rerun: the borderline gift-card voicemail
+(`c-206`) is no longer caught (8 threats instead of 9).
+Show both groups in Amplitude (every event carries the gate values), turn it back on.
 
 ## 2:45 – 3:00 Close
 "Set it up once. Guardian protects your identity, tells someone you trust, and shows its work. Next: real Gmail in

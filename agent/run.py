@@ -27,6 +27,38 @@ def load_env(path=os.path.join(ROOT, ".env")):
                     os.environ.setdefault(key.strip(), value.strip())
 
 
+def approve(key, run_dir=None, store=None, now=None):
+    """Say yes to one held action (for example dispute:tx-4). It runs on the next run, and only it.
+
+    The approval goes into the same store the app uses, so the CLI and the app agree on what was approved.
+    """
+    run_dir = run_dir or os.path.join(ROOT, "runs")
+    store = store or st.open_store(os.path.join(run_dir, "guardian.sqlite3"))
+    held = st.waiting(store)
+    if key not in held:
+        raise SystemExit("nothing waiting for you as %r; waiting: %s" % (key, ", ".join(held) or "nothing"))
+    st.approve(store, key, now or datetime.now().isoformat(timespec="seconds"))
+    return st.approved_keys(store)
+
+
+def already_done(key, run_dir=None, store=None):
+    """A run stopped part-way through `key`, the person checked, and it had happened: never run it again."""
+    run_dir = run_dir or os.path.join(ROOT, "runs")
+    store = store or st.open_store(os.path.join(run_dir, "guardian.sqlite3"))
+    stuck = [k for k in st.waiting(store) if (st.action_done(store, k) or {}).get("status") == st.STARTED]
+    if key not in stuck:
+        raise SystemExit("nothing stopped part-way as %r; stopped part-way: %s" % (key, ", ".join(stuck) or "nothing"))
+    st.confirm_done(store, key)
+
+
+def message(result):
+    """The message an action sent, if it sent one: who it went to, how, and the text."""
+    if result.get("text") and result.get("to"):
+        return {"to": result["to"], "channel": result.get("channel", ""), "text": result["text"],
+                "drafted_by": result.get("drafted_by")}
+    return None
+
+
 def handle(threat, ctx):
     """Work one threat end to end. New threats are recorded; held actions are retried each run."""
     log, store, run_id, now = ctx["log"], ctx["store"], ctx["run_id"], ctx["now"]
@@ -46,13 +78,26 @@ def handle(threat, ctx):
         done = st.action_done(store, action["key"])
         if done and done["status"] == st.STARTED:
             # A run stopped in the middle of this action: it may or may not have happened. Never repeat it blindly.
-            outcomes.append({"action": action["type"], "key": action["key"], "status": "waiting for you",
-                             "reason": "Guardian stopped part-way through this in %s; please check it" % done["run_id"]})
-            log.event("check_history", "check_history", {"action": action["key"]}, done, threat["key"])
-            continue
+            # Only a yes given after it got stuck retries it; an older approval (the one it ran under) does not.
+            said_yes = st.approved_at(store, action["key"])
+            log.event("check_history", "check_history", {"action": action["key"]},
+                      {k: v for k, v in done.items() if k != "detail"}, threat["key"])
+            if not (said_yes and said_yes > (done.get("created_at") or "")):
+                ask = respond.stuck_ask(action, ctx["profile"])
+                outcomes.append({"action": action["type"], "key": action["key"], "status": "waiting for you",
+                                 "reason": "Guardian stopped part-way through this in %s; please check it" % done["run_id"],
+                                 "ask": ask, "approve": action["key"], "stuck": True})
+                continue
+            done = None  # the person checked and said try again: go through the gates as usual
         if done:
-            outcomes.append({"action": action["type"], "key": action["key"], "status": "already done in " + done["run_id"]})
-            log.event("check_history", "check_history", {"action": action["key"]}, done, threat["key"])
+            try:
+                earlier = json.loads(done.get("detail") or "{}")
+            except ValueError:
+                earlier = {}
+            outcomes.append({"action": action["type"], "key": action["key"], "status": "already done in " + done["run_id"],
+                             "message": message(earlier)})
+            log.event("check_history", "check_history", {"action": action["key"]},
+                      {k: v for k, v in done.items() if k != "detail"}, threat["key"])
             continue
         allowed, reason = respond.guard(action, ctx["gates"], ctx["verification"], ctx["profile"], now,
                                         ctx.get("approved", ()))
@@ -80,7 +125,8 @@ def handle(threat, ctx):
         st.save_action(store, action, threat["key"], result, run_id, now)
         outcomes.append({"action": action["type"], "key": action["key"], "status": result["status"],
                          "reason": result.get("reason", reason), "ask": result.get("ask"),
-                         "text": result.get("text")})
+                         "approve": action["key"] if result.get("ask") else None,
+                         "text": result.get("text"), "message": message(result)})
     return {"threat": threat["key"], "kind": threat["kind"], "severity": threat["severity"],
             "summary": threat["summary"], "evidence": threat["evidence"], "new": is_new, "actions": outcomes}
 
@@ -158,10 +204,27 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run Guardian once.")
+    parser.add_argument("--approve", metavar="ACTION", help="say yes to a held action first, e.g. dispute:tx-4 "
+                        "(for an action a crash left part-way: try it again)")
+    parser.add_argument("--already-done", metavar="ACTION",
+                        help="an action a crash left part-way did happen: record it as done, never run it again")
+    args = parser.parse_args()
     load_env()
+    if args.approve:
+        approve(args.approve)
+        print("Approved %s. Running Guardian now." % args.approve)
+    if args.already_done:
+        already_done(args.already_done)
+        print("Recorded %s as done. Running Guardian now." % args.already_done)
     s = run()
     print(json.dumps({k: v for k, v in s.items() if k != "results"}, indent=2))
     for r in s["results"]:
         print("-", r["severity"], r["summary"])
         for a in r["actions"]:
             print("    ", a["action"], "->", a["status"], ("(" + a["reason"] + ")") if a["status"] == "waiting for you" else "")
+            if a.get("approve"):
+                print("        to approve: python3 agent/run.py --approve", a["approve"])
+            if a.get("stuck"):
+                print("        if it already happened: python3 agent/run.py --already-done", a["approve"])

@@ -11,7 +11,14 @@ const fs = require('fs');
   const ctx = await b.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.grantPermissions(['notifications'], { origin: 'http://localhost:8800' });
   const p = await ctx.newPage();
-  const errors = []; p.on('pageerror', e => errors.push(e.message)); p.on('console', m => m.type() === 'error' && errors.push(m.text()));
+  const errors = []; let noSidecar = false;  // on the verify page with no sidecar, one 400 from /api/persona/begin is expected
+  p.on('pageerror', e => errors.push(e.message));
+  p.on('console', m => {
+    if (m.type() !== 'error') return;
+    const url = (m.location() && m.location().url) || '';
+    if (noSidecar && /status of 400/.test(m.text()) && url.endsWith('/api/persona/begin')) return;
+    errors.push(m.text() + (url ? ' (' + url + ')' : ''));
+  });
   const cdp = await ctx.newCDPSession(p);
   await cdp.send('WebAuthn.enable');
   await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal',
@@ -59,8 +66,10 @@ const fs = require('fs');
   console.log('3 home hero:', /Almost ready/.test(t) ? 'Almost ready (sample data)' : 'MISSING', '| items:', (await p.$$('.card.item')).length,
     '| asks:', await p.getByText('Yes, do it').count());
   console.log('   family not invited, needs Persona first:', /Sam \(daughter\) not invited yet/.test(t) && /First, do the Persona check/.test(t));
+  noSidecar = true;
   await p.getByText('Verify with Persona').click();
   await p.getByText(/isn.t set up on this computer|reach the Persona check/).waitFor();
+  noSidecar = false;
   console.log('   verify page (no sidecar):', (await p.textContent('#status')).trim());
   await shot('verify');
   await p.getByText('Back to Guardian').click();
@@ -102,4 +111,5 @@ const fs = require('fs');
   console.log('8 deleted -> back at welcome');
   console.log('page errors:', JSON.stringify(errors));
   await b.close();
+  if (errors.length) { console.error('E2E FAILED: the page logged errors'); process.exit(1); }
 })().catch(e => { console.error('E2E FAILED:', e.message); process.exit(1); });

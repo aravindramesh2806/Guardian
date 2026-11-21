@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Agent and app tests (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+      - name: Install app dependencies (webauthn)
+        run: pip install -r app/requirements.txt
+      - name: Unit, adversarial and app tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: 30-day synthetic quality bar
+        run: |
+          python agent/evaluate.py | tee evaluate.txt
+          grep -q "Overall: MEETS THE BAR" evaluate.txt
+
+  persona:
+    name: Persona Relay sidecar (Node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: persona
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: persona/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  e2e:
+    name: Browser test with a virtual passkey
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: persona/package-lock.json
+      - name: Install app dependencies
+        run: pip install -r app/requirements.txt
+      - name: Install the Persona sidecar's packages (the app serves the Relay widget from them)
+        run: npm ci
+        working-directory: persona
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save --no-package-lock playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: Start the app on an empty users folder
+        run: |
+          mkdir -p "$RUNNER_TEMP/users" "$RUNNER_TEMP/shots"
+          GUARDIAN_QUIET=1 GUARDIAN_USERS_DIR="$RUNNER_TEMP/users" python app/server.py > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:8800/api/me && exit 0; sleep 1; done
+          cat "$RUNNER_TEMP/server.log"; exit 1
+      - name: Sign up, set up, approve, undo, pause, sign in again, delete
+        run: node tests/e2e_app.js "$RUNNER_TEMP/shots"
+      - name: Upload screenshots and server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: |
+            ${{ runner.temp }}/shots
+            ${{ runner.temp }}/server.log
+          if-no-files-found: ignore

@@ -54,7 +54,7 @@ class Core(unittest.TestCase):
         uid = new_user()
         f = core.feed(uid)
         self.assertEqual(f["data_source"], "sample")
-        self.assertEqual(len(f["items"]), 8)
+        self.assertEqual(len(f["items"]), 9)
         lock = next(i for i in f["items"] if "389.00" in i["summary"])
         self.assertTrue(any("Persona" in w for w in lock["waiting"]))
         self.assertEqual(json.load(open(os.path.join(USERS_TMP, uid, "data", "verification.json")))["result"], "not checked")
@@ -141,6 +141,35 @@ class Core(unittest.TestCase):
         f = core.feed(uid)
         self.assertEqual(f["needs_you"], [])
         self.assertIn("Dispute filed", next(i for i in f["items"] if "389.00" in i["summary"])["did"])
+
+    def stick(self, uid):
+        """Make it look as if a check died part-way through quarantining the PayLinc email."""
+        from agent import store as st
+        st.mark_started(core._store(uid), {"key": "quarantine:m-101", "type": "quarantine"}, "phishing:m-101",
+                        "run-crashed", "2000-01-01T00:00:00")
+        core.run_for(uid)
+        return next(n for n in core.feed(uid)["needs_you"] if n["key"] == "quarantine:m-101")
+
+    def test_a_stuck_action_is_in_needs_you_and_already_happened_closes_it(self):
+        uid = new_user()
+        n = self.stick(uid)
+        self.assertTrue(n["stuck"])
+        self.assertIn("stopped part-way", n["ask"])
+        dispute = next(n["key"] for n in core.feed(uid)["needs_you"] if not n["stuck"])
+        with self.assertRaises(core.AppError):  # the dispute is waiting, but it is not stuck
+            core.already_done(uid, dispute)
+        core.already_done(uid, "quarantine:m-101")
+        f = core.feed(uid)
+        self.assertNotIn("quarantine:m-101", [n["key"] for n in f["needs_you"]])
+        self.assertIn("Moved to quarantine", next(i for i in f["items"] if "paylinc" in i["summary"])["did"])
+
+    def test_a_stuck_action_can_be_tried_again(self):
+        uid = new_user()
+        self.stick(uid)
+        core.approve(uid, "quarantine:m-101")
+        f = core.feed(uid)
+        self.assertNotIn("quarantine:m-101", [n["key"] for n in f["needs_you"]])
+        self.assertIn("Moved to quarantine", next(i for i in f["items"] if "paylinc" in i["summary"])["did"])
 
     def test_this_was_real_undoes_once_and_never_acts_again(self):
         uid = new_user()
@@ -237,6 +266,8 @@ class Server(unittest.TestCase):
         uid, token = self.session(stepped_up=False)
         key = core.feed(uid)["needs_you"][0]["key"]
         status, body, _ = self.request("POST", "/api/approve", {"key": key}, token)
+        self.assertEqual((status, body.get("step_up")), (403, True))
+        status, body, _ = self.request("POST", "/api/already-done", {"key": key}, token)
         self.assertEqual((status, body.get("step_up")), (403, True))
         status, body, _ = self.request("POST", "/api/delete", {}, token)
         self.assertEqual((status, body.get("step_up")), (403, True))
@@ -570,17 +601,40 @@ class GmailInApp(unittest.TestCase):
         self.addCleanup(httpd.shutdown)
         port = httpd.server_address[1]
 
-        def get(path):
+        def get(path, cookie=None):
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
-            conn.request("GET", path)
+            conn.request("GET", path, headers={"Cookie": cookie} if cookie else {})
             r = conn.getresponse()
             return r.read().decode()
-        self.assertIn("gmail_error", get("/oauth/google/callback?state=forged&code=good-code"))
+        self.assertIn("gmail_error", get("/oauth/google/callback?state=forged&code=good-code", "goauth=forged"))
         uid = new_user()
         server.oauth_flows["st-1"] = {"uid": uid, "verifier": "v", "created": time.time()}
-        self.assertIn("/?gmail=connected", get("/oauth/google/callback?state=st-1&code=good-code"))
+        # Someone else's browser finishing this sign-in (no cookie, or another one) is refused, and the
+        # sign-in is not used up by it.
+        self.assertIn("gmail_error", get("/oauth/google/callback?state=st-1&code=good-code"))
+        self.assertIn("gmail_error", get("/oauth/google/callback?state=st-1&code=good-code", "goauth=st-2"))
+        self.assertEqual(core.feed(uid)["data_source"], "sample")
+        self.assertIn("/?gmail=connected", get("/oauth/google/callback?state=st-1&code=good-code", "goauth=st-1"))
         self.assertEqual(core.feed(uid)["data_source"], "gmail")
-        self.assertIn("gmail_error", get("/oauth/google/callback?state=st-1&code=good-code"))  # used once
+        self.assertIn("gmail_error", get("/oauth/google/callback?state=st-1&code=good-code", "goauth=st-1"))  # once
+
+    @unittest.skipIf(server is None, "webauthn not installed")
+    def test_starting_a_sign_in_ties_it_to_this_browser(self):
+        httpd, _ = server.serve(port=0, worker=False)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        uid = new_user()
+        token = server._new_session(uid)
+        conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=20)
+        conn.request("GET", "/oauth/google/start", headers={"Cookie": "gsid=" + token})
+        r = conn.getresponse()
+        r.read()
+        import urllib.parse as up
+        state = dict(up.parse_qsl(r.getheader("Location").split("?", 1)[1]))["state"]
+        cookie = r.getheader("Set-Cookie")
+        self.assertTrue(cookie.startswith("goauth=%s;" % state))
+        for part in ("HttpOnly", "SameSite=Lax", "Path=/oauth/google/callback", "Max-Age=600"):
+            self.assertIn(part, cookie)
 
 
 class EmailCheck(unittest.TestCase):

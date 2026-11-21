@@ -622,9 +622,13 @@ function render() {
   const banner = notice ? (notice.ok ? note("soft", "check", notice.text) : errorBox(notice.text)) : null;
   notice = null;
 
+  // A stuck action (a crash left it part-way) asks whether it happened: retry it, or record that it did.
   const needs = f.needs_you.map((n) => el("div", { class: "card" },
     el("h3", {}, n.ask), el("p", { class: "muted small" }, "You'll confirm with " + confirmWith() + "."),
-    act(el("button", { class: "btn mt-s" }, "Yes, do it"), () => call("/api/approve", { key: n.key }))));
+    act(el("button", { class: "btn mt-s" }, n.stuck ? "It didn't happen, try again" : "Yes, do it"),
+      () => call("/api/approve", { key: n.key })),
+    n.stuck ? act(el("button", { class: "btn2 mt-s" }, "It already happened"),
+      () => call("/api/already-done", { key: n.key })) : null));
 
   const v = f.verified || {};
   const verify = v.fresh ? null : el("div", { class: "card" }, el("span", { class: "tag medium" }, "Quick check"),
@@ -658,7 +662,8 @@ function render() {
     const accounts = el("input", { type: "text", id: "accounts", value: (f.accounts || []).join(", "), placeholder: "e.g. mybank.com, amazon.com" });
     source = el("div", { class: "card stack g10" },
       el("h3", {}, "Watching " + (f.gmail.email || "your Gmail")),
-      el("p", { class: "muted" }, "Guardian reads new mail and tells you what it would do. It acts on nothing until you're ready."),
+      el("p", { class: "muted" }, "Guardian reads new mail and tells you what it would do. It acts on nothing until you're ready. Last check: " + ago(f.gmail.last_sync) + "."),
+      f.gmail.last_error ? errorBox("Last check failed: " + f.gmail.last_error) : null,
       el("label", { for: "accounts" }, "Your bank and main accounts (website addresses)"),
       el("p", { class: "muted small" }, "Emails pretending to be these get flagged."), accounts,
       act(el("button", { class: "btn2" }, "Save my accounts"), () => call("/api/accounts", { accounts: accounts.value.split(/[\s,]+/).filter(Boolean) })),
