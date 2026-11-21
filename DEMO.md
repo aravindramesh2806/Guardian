@@ -43,7 +43,8 @@ Scroll to a scam voicemail: the cards show the exact message Rose got (with step
 ## 1:05 – 1:40 And when the scammer calls live (live tab, press Replay)
 "Guardian doesn't only clean up afterwards." The island reads *Guardian is listening*. After "Grandma,
 it's me" the score turns yellow. At "bail money, don't tell mom" it turns red: **Hang up. They are
-asking for money or gift cards.** That lands nine seconds *before* the gift-card ask. It ends with
+asking for money or gift cards.** That lands *before* the gift-card ask: nine seconds earlier in the real call (the replay
+runs faster, so on screen it is about six). It ends with
 *Blocked. Sam (daughter) was told.*
 
 ## 1:40 – 2:25 Why you can trust it (report tab, open one threat's audit trail)
