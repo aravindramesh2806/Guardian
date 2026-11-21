@@ -111,7 +111,7 @@ let page = null, pageErrors = [];  // kept outside so a failure can save what wa
   await tap("Resume Guardian's actions");
   await p.getByText('Almost ready').waitFor();
   console.log('6 paused and resumed | alerts button:', await p.getByText('Turn on alerts on this device').count() === 1);
-  await tap('Sign out');
+  await p.getByRole('button', { name: 'Sign out', exact: true }).first().click();  // one in the header, one at the bottom
   await tap('I already have an account');
   await p.getByText('Hi, Rose').waitFor();
   console.log('7 signed out, signed back in with the same passkey');
