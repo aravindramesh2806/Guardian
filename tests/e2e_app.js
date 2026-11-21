@@ -8,12 +8,13 @@ const { chromium } = require('playwright');
 const dir = process.argv[2], usersDir = process.argv[3] || process.env.GUARDIAN_USERS_DIR;
 if (!dir || !usersDir) { console.error('usage: node tests/e2e_app.js <screenshots folder> <users folder>'); process.exit(2); }
 const fs = require('fs');
+let page = null, pageErrors = [];  // kept outside so a failure can save what was on screen
 (async () => {
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.grantPermissions(['notifications'], { origin: 'http://localhost:8800' });
-  const p = await ctx.newPage();
-  const errors = []; let noSidecar = false;  // on the verify page with no sidecar, one 400 from /api/persona/begin is expected
+  const p = page = await ctx.newPage();
+  const errors = pageErrors; let noSidecar = false;  // on the verify page with no sidecar, one 400 from /api/persona/begin is expected
   p.on('pageerror', e => errors.push(e.message));
   p.on('console', m => {
     if (m.type() !== 'error') return;
@@ -114,4 +115,14 @@ const fs = require('fs');
   console.log('page errors:', JSON.stringify(errors));
   await b.close();
   if (errors.length) { console.error('E2E FAILED: the page logged errors'); process.exit(1); }
-})().catch(e => { console.error('E2E FAILED:', e.message); process.exit(1); });
+})().catch(async e => {
+  console.error('E2E FAILED:', e.message);
+  if (pageErrors.length) console.error('page errors:', JSON.stringify(pageErrors));
+  if (page) {
+    try {
+      console.error('on screen:', ((await page.textContent('main', { timeout: 2000 })) || '').replace(/\s+/g, ' ').slice(0, 600));
+      await page.screenshot({ path: `${dir}/e2e-failure.png`, fullPage: true, timeout: 5000 });
+    } catch (_) { /* best effort */ }
+  }
+  process.exit(1);
+});
