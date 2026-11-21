@@ -41,7 +41,7 @@ def brief_lines(summary):
     lines = ["%d new threat%s today. %d stopped for you, %s%s." % (
         len(new), "" if len(new) == 1 else "s", summary["stopped"],
         ("%d need%s you" % (waiting, "s" if waiting == 1 else "")) if waiting else "nothing needs you",
-        (", and your family was told about %d" % family) if family else "")]
+        (", and someone you trust was told about %d" % family) if family else "")]
     for r in new[:3]:
         done = [shown(a["status"]) for a in r["actions"]
                 if a["status"].endswith(("(simulated)", "(firedrill)")) and a["action"] != "alert"]

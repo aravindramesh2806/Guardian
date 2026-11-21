@@ -1,18 +1,27 @@
 // Browser test of the whole app with a virtual passkey (Chromium WebAuthn emulation).
-// Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots>
-// e.g. GUARDIAN_USERS_DIR=/tmp/g-e2e .venv/bin/python app/server.py &  then  node tests/e2e_app.js /tmp
+// Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots> <users folder>
+// e.g. GUARDIAN_USERS_DIR=/tmp/g-e2e .venv/bin/python app/server.py &  then  node tests/e2e_app.js /tmp /tmp/g-e2e
+// (the users folder can also come from GUARDIAN_USERS_DIR; the sign-up code is read from its dev_mail.log)
+// Persona's widget doesn't run headless, so the trusted person stays "not invited" here (tests/test_app.py
+// covers the invite itself).
 const { chromium } = require('playwright');
-const dir = process.argv[2];
+const dir = process.argv[2], usersDir = process.argv[3] || process.env.GUARDIAN_USERS_DIR;
+if (!dir || !usersDir) { console.error('usage: node tests/e2e_app.js <screenshots folder> <users folder>'); process.exit(2); }
+const fs = require('fs');
+let page = null, pageErrors = [];  // kept outside so a failure can save what was on screen
 (async () => {
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 390, height: 844 } });
-  const p = await ctx.newPage();
-  const errors = []; let noSidecar = false;  // on the verify page with no sidecar, one 400 from /api/persona/begin is expected
+  await ctx.grantPermissions(['notifications'], { origin: 'http://localhost:8800' });
+  const p = page = await ctx.newPage();
+  const errors = pageErrors; let noSidecar = false;  // on the verify page with no sidecar, one 400 from /api/persona/begin is expected
   p.on('pageerror', e => errors.push(e.message));
   p.on('console', m => {
     if (m.type() !== 'error') return;
     const url = (m.location() && m.location().url) || '';
     if (noSidecar && /status of 400/.test(m.text()) && url.endsWith('/api/persona/begin')) return;
+    if (/status of 400/.test(m.text()) && url.endsWith('/api/email/verify')) return;  // the deliberately wrong code
+    if (/does not support the Push API in incognito/.test(m.text())) return;  // headless Chromium has no push service
     errors.push(m.text() + (url ? ' (' + url + ')' : ''));
   });
   const cdp = await ctx.newCDPSession(p);
@@ -21,32 +30,52 @@ const dir = process.argv[2];
     hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
   const shot = async (name) => { await p.screenshot({ path: `${dir}/e2e-${name}.png`, fullPage: true }); };
   const text = async () => (await p.textContent('main')).replace(/\s+/g, ' ');
+  const tap = (label) => p.getByRole('button', { name: label, exact: true }).click();
+
   await p.goto('http://localhost:8800/');
   await shot('welcome');
-  await p.getByText('Get started').click();
+  await tap('Get started');
+  await p.getByText('Who is Guardian for?').waitFor();
+  await p.getByRole('button', { name: /^Me / }).click();
   await p.fill('#name', 'Rose');
-  await p.getByText('Create my account with Face ID or fingerprint').click();
-  await p.getByText('Step 1 of 5').waitFor();
-  console.log('1 registered with a passkey -> setup step 1');
-  await p.getByText('Continue', { exact: true }).click();
-  await p.getByText('Continue with sample data for now').click();
+  await p.fill('#email', 'rose.e2e@example.com');
+  await tap('Continue with Face ID');
+  await p.getByText('Check your email').waitFor();
+  await shot('verify-email');
+  const mail = fs.readFileSync(usersDir + '/dev_mail.log', 'utf8');
+  const code = mail.match(/Your Guardian code is (\d{6})/g).pop().slice(-6);
+  await p.fill('#code', '000000' === code ? '111111' : '000000');
+  await tap('Confirm');
+  await p.getByText(/isn't right/).waitFor();
+  await p.fill('#code', code);
+  await tap('Confirm');
+  await p.getByText('A quick check that you\'re really here').waitFor();
+  console.log('1 registered with a passkey, wrong code refused, emailed code accepted -> Persona step (step 2 of 6)');
+  await tap('Do this later');
+  await p.getByText('Guardian will never').waitFor();
+  await tap('Continue');
   await p.fill('#fname', 'Sam (daughter)'); await p.fill('#fphone', '+1 555 0142');
-  await p.getByText('Continue', { exact: true }).click();
-  await p.getByText('Act for me, then tell me').click();
-  await p.check('#senior');
-  await shot('setup-4');
-  await p.getByText('Continue', { exact: true }).click();
-  await p.getByText('Step 5 of 5').waitFor();
-  await p.getByText('Send me a test alert').click();
-  await p.getByText('This is what a Guardian alert looks like').waitFor();
-  console.log('2 setup done, test alert shown');
-  await p.getByText('Go to my Guardian').click();
-  await p.getByText('Hello, Rose').waitFor();
+  await tap('Continue');
+  await p.getByRole('radio', { name: /Act for me, then tell me/ }).click();
+  await p.getByRole('switch').click();
+  await shot('setup-mode');
+  await tap('Continue');
+  await p.getByText('Step 6 of 6').waitFor();
+  await tap('Send me a practice alert');
+  // Headless Chromium can't show the notification, so the app offers to go on without alerts: either way is fine here.
+  const gotIt = p.getByRole('button', { name: 'Yes, I got it', exact: true });
+  const without = p.getByRole('button', { name: 'Continue without alerts for now', exact: true });
+  await gotIt.or(without).first().waitFor();
+  const shown = await gotIt.isVisible();
+  await (shown ? gotIt : without).click();
+  console.log('2 setup done, practice alert', shown ? 'sent and confirmed' : "couldn't show here, continued without alerts");
+
+  await p.getByText('Hi, Rose').waitFor();
   await shot('home');
   let t = await text();
-  console.log('3 home status:', /You're protected/.test(t) ? "You're protected" : 'MISSING', '| items:', (await p.$$('.card.item')).length,
-    '| asks:', await p.locator('.card', { hasText: 'Needs you' }).count(), '| sample notice:', /sample data/.test(t));
-  console.log('   persona card:', await p.getByText('Verify with Persona').count() === 1);
+  console.log('3 home hero:', /Almost ready/.test(t) ? 'Almost ready (sample data)' : 'MISSING', '| items:', (await p.$$('.card.item')).length,
+    '| asks:', await p.getByText('Yes, do it').count());
+  console.log('   family not invited, needs Persona first:', /Sam \(daughter\) not invited yet/.test(t) && /First, do the Persona check/.test(t));
   noSidecar = true;
   await p.getByText('Verify with Persona').click();
   await p.getByText(/isn.t set up on this computer|reach the Persona check/).waitFor();
@@ -54,8 +83,19 @@ const dir = process.argv[2];
   console.log('   verify page (no sidecar):', (await p.textContent('#status')).trim());
   await shot('verify');
   await p.getByText('Back to Guardian').click();
-  await p.getByText('Hello, Rose').waitFor();
-  const ask = p.locator('.card', { hasText: 'Dispute $389.00' });
+  await p.getByText('Hi, Rose').waitFor();
+  await p.goto('http://localhost:8800/?read=' + encodeURIComponent('charge:tx-4'));
+  await p.locator('.card.item.focus').waitFor();
+  console.log('   alert "See details" -> focused item open:', await p.locator('.card.item.focus details[open]').count() === 1);
+  await p.goto('http://localhost:8800/?undo=' + encodeURIComponent('scam:c-201'));
+  await p.getByText('Was this real?').waitFor();
+  await shot('alert-undo');
+  await tap('No, it was a scam');
+  await p.getByText("Let's deal with it").waitFor();
+  console.log('   alert "It was real" -> asked, and "No, it was a scam" opened the fix screen');
+  await tap('Back to my Guardian');
+  await p.getByText('Hi, Rose').waitFor();
+  const ask = p.locator('.card', { hasText: 'Dispute $389.00' }).filter({ has: p.getByText('Yes, do it') });
   await ask.getByText('Yes, do it').click();
   await p.waitForTimeout(1500);
   t = await text();
@@ -65,23 +105,31 @@ const dir = process.argv[2];
   await phish.getByText('This was real, not a scam').click();
   await p.getByText(/You marked 1 as real/).waitFor();
   console.log('5 "This was real" -> moved under "You marked 1 as real"');
-  await p.getByText('Simulate their YES (no SMS account yet)').click();
-  await p.getByText('Agreed to be told about serious scams.').waitFor();
-  await p.getByText("Pause Guardian's actions").click();
-  await p.getByText("Guardian's actions are paused.").waitFor();
+  await tap("Pause Guardian's actions");
+  await p.getByText("Guardian's actions are paused").waitFor();
   await shot('paused');
-  console.log('6 family agreed; paused');
-  await p.getByText("Resume Guardian's actions").click();
-  await p.getByText("You're protected.").waitFor();
-  await p.getByText('Sign out').click();
-  await p.getByText('I already use Guardian').click();
-  await p.getByText('Hello, Rose').waitFor();
+  await tap("Resume Guardian's actions");
+  await p.getByText('Almost ready').waitFor();
+  console.log('6 paused and resumed | alerts button:', await p.getByText('Turn on alerts on this device').count() === 1);
+  await p.getByRole('button', { name: 'Sign out', exact: true }).first().click();  // one in the header, one at the bottom
+  await tap('I already have an account');
+  await p.getByText('Hi, Rose').waitFor();
   console.log('7 signed out, signed back in with the same passkey');
-  await p.getByText('Delete my data').click();
+  await tap('Delete my data');
   await p.getByText(/Tap again to delete everything/).click();
   await p.getByText('Get started').waitFor();
   console.log('8 deleted -> back at welcome');
   console.log('page errors:', JSON.stringify(errors));
   await b.close();
   if (errors.length) { console.error('E2E FAILED: the page logged errors'); process.exit(1); }
-})().catch(e => { console.error('E2E FAILED:', e.message); process.exit(1); });
+})().catch(async e => {
+  console.error('E2E FAILED:', e.message);
+  if (pageErrors.length) console.error('page errors:', JSON.stringify(pageErrors));
+  if (page) {
+    try {
+      console.error('on screen:', ((await page.textContent('main', { timeout: 2000 })) || '').replace(/\s+/g, ' ').slice(0, 600));
+      await page.screenshot({ path: `${dir}/e2e-failure.png`, fullPage: true, timeout: 5000 });
+    } catch (_) { /* best effort */ }
+  }
+  process.exit(1);
+});

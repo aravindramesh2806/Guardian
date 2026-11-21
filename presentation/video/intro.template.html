@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Guardian intro</title>
+<style>
+  :root { --bg:#0B1F1A; --ink:#FFFFFF; --soft:#CFE7DC; --muted:#8FA59C; --green:#0B6E4F; --mint:#3FB98A; --amber:#E0A100; --red:#D0453F; --card:#12302A; --line:#1F4A3F; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "SF Pro Display", "Segoe UI", Roboto, sans-serif; }
+  .stage { position: absolute; inset: 0; background: radial-gradient(1200px 700px at 70% 30%, #12382F 0%, var(--bg) 65%); }
+  .scene { position: absolute; inset: 0; opacity: 0; }
+  .serif { font-family: Cambria, Georgia, "Times New Roman", serif; }
+  .tile { width: 140px; height: 140px; border-radius: 38px; background: var(--green); display: flex; align-items: center; justify-content: center; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+  .tile svg { width: 72px; height: 72px; fill: #fff; }
+  .tile.sm { width: 84px; height: 84px; border-radius: 24px; } .tile.sm svg { width: 42px; height: 42px; }
+  .abs { position: absolute; }
+  .h1 { font-size: 96px; font-weight: 700; line-height: 1.05; letter-spacing: -1px; }
+  .h2 { font-size: 64px; font-weight: 700; line-height: 1.1; }
+  .lead { font-size: 36px; color: var(--soft); line-height: 1.35; }
+  .chip { display: inline-flex; align-items: center; gap: 18px; padding: 22px 30px; border-radius: 22px; background: var(--card); border: 1px solid var(--line); font-size: 32px; font-weight: 600; }
+  .chip svg { width: 38px; height: 38px; fill: var(--mint); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 28px; }
+  /* phone */
+  .phone { width: 520px; height: 960px; border-radius: 76px; background: #050B09; border: 10px solid #22332E; box-shadow: 0 40px 120px rgba(0,0,0,.5); overflow: hidden; }
+  .notif { position: absolute; left: 26px; right: 26px; border-radius: 26px; background: rgba(255,255,255,.96); color: #0F1E2E; padding: 20px 22px; display: flex; gap: 16px; align-items: flex-start; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+  .notif .ic { flex: none; width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; }
+  .notif .ic svg { width: 28px; height: 28px; fill: #fff; }
+  .notif b { display: block; font-size: 24px; } .notif span { font-size: 21px; color: #4A5866; }
+  .island { position: absolute; top: 22px; left: 50%; transform: translateX(-50%); height: 64px; border-radius: 32px; background: #000; display: flex; align-items: center; gap: 14px; padding: 0 22px; color: #fff; font-size: 22px; font-weight: 650; white-space: nowrap; overflow: hidden; border: 2px solid transparent; }
+  .dot { width: 22px; height: 22px; border-radius: 50%; flex: none; }
+  .bubble { position: absolute; left: 30px; max-width: 400px; padding: 18px 22px; border-radius: 24px 24px 24px 6px; background: #2A3B36; font-size: 24px; color: #fff; }
+  .bubble.rose { left: auto; right: 30px; border-radius: 24px 24px 6px 24px; background: #0B6E4F; }
+  .step { display: flex; align-items: center; gap: 26px; font-size: 34px; font-weight: 600; height: 96px; }
+  .check { width: 60px; height: 60px; border-radius: 50%; border: 3px solid var(--line); display: flex; align-items: center; justify-content: center; flex: none; font-size: 28px; font-weight: 800; color: var(--muted); }
+  .stat { font-size: 120px; font-weight: 800; line-height: 1; }
+  .statlbl { font-size: 28px; color: var(--soft); margin-top: 8px; }
+  .progress { position: absolute; left: 0; bottom: 0; height: 6px; background: var(--mint); }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+
+  <!-- 1. Logo -->
+  <div class="scene" id="sc1">
+    <div class="abs tile" id="logo1" style="left:890px; top:300px">{{FaShieldAlt}}</div>
+    <div class="abs" id="brand1" style="left:0; width:1920px; top:480px; text-align:center; font-size:44px; font-weight:800; letter-spacing:18px">GUARDIAN</div>
+    <div class="abs serif h1" id="tag1" style="left:0; width:1920px; top:600px; text-align:center">Scams move fast. Guardian moves first.</div>
+  </div>
+
+  <!-- 2. Problem -->
+  <div class="scene" id="sc2">
+    <div class="abs serif" id="loss" style="left:160px; top:220px; font-size:220px; font-weight:700; color:var(--mint)">$0.0B</div>
+    <div class="abs lead" id="lossl" style="left:170px; top:480px; width:900px">reported lost to internet crime in 2025, at every age</div>
+    <div class="abs" id="grow" style="left:170px; top:610px; font-size:40px; font-weight:700; color:#FF8A80">26% more than the year before</div>
+    <div class="abs" id="ch0" style="left:1180px; top:250px"><span class="chip">{{FaPhoneAlt}} Spoofed bank calls</span></div>
+    <div class="abs" id="ch1" style="left:1180px; top:400px"><span class="chip">{{FaCommentDots}} Pay-by-link texts</span></div>
+    <div class="abs" id="ch2" style="left:1180px; top:550px"><span class="chip">{{FaEnvelope}} Lookalike emails</span></div>
+    <div class="abs" id="src2" style="left:170px; top:900px; font-size:22px; color:var(--muted); font-style:italic">Source: FBI IC3 2025 Internet Crime Report</div>
+  </div>
+
+  <!-- 3. Rose + setup -->
+  <div class="scene" id="sc3">
+    <div class="abs card" id="rose" style="left:160px; top:200px; width:620px; height:680px; padding:56px">
+      <div style="width:150px; height:150px; border-radius:50%; background:var(--green); display:flex; align-items:center; justify-content:center; font-size:72px; font-weight:800" class="serif">R</div>
+      <div class="serif" style="font-size:64px; font-weight:700; margin-top:40px">Meet Rose, 78</div>
+      <div class="lead" style="margin-top:20px; font-size:32px">Her daughter Sam is her trusted contact, and said YES.</div>
+    </div>
+    <div class="abs" style="left:900px; top:200px">
+      <div class="serif" style="font-size:48px; font-weight:700; margin-bottom:24px">Set up once</div>
+      <div class="step" id="st0"><div class="check">1</div>Who it’s for</div>
+      <div class="step" id="st1"><div class="check">2</div>Passkey sign-in, no passwords</div>
+      <div class="step" id="st2"><div class="check">3</div>Connect email, read-only</div>
+      <div class="step" id="st3"><div class="check">4</div>Sam agrees to be told</div>
+      <div class="step" id="st4"><div class="check">5</div>“Just tell me” or “Act for me”</div>
+      <div id="under5" style="margin-top:30px; font-size:34px; font-weight:700; color:var(--mint)">Under 5 minutes. Nothing to tune after.</div>
+    </div>
+  </div>
+
+  <!-- 4. One morning -->
+  <div class="scene" id="sc4">
+    <div class="abs phone" style="left:200px; top:60px">
+      <div style="position:absolute; top:110px; width:100%; text-align:center; color:#fff">
+        <div style="font-size:30px; color:#9FB3AB">Tuesday</div><div style="font-size:110px; font-weight:300">7:42</div>
+      </div>
+      <div class="notif" id="n0"><div class="ic" style="background:#B83232">{{FaPhoneAlt}}</div><div><b>Fake bank voicemail blocked</b><span>Rose warned · Sam told</span></div></div>
+      <div class="notif" id="n1"><div class="ic" style="background:#B83232">{{FaPhoneAlt}}</div><div><b>“Grandma, it’s me” call blocked</b><span>Sam told</span></div></div>
+      <div class="notif" id="n2"><div class="ic" style="background:#0B6E4F">{{FaCommentDots}}</div><div><b>Parcel pay-link text blocked</b><span>Nothing to do</span></div></div>
+      <div class="notif" id="n3"><div class="ic" style="background:#E0A100">{{FaCreditCard}}</div><div><b>$389 charge: card locked</b><span>Dispute waits for your yes</span></div></div>
+      <div class="notif" id="n4"><div class="ic" style="background:#0B6E4F">{{FaEnvelope}}</div><div><b>“PayLinc” refund quarantined</b><span>Lookalike sender</span></div></div>
+    </div>
+    <div class="abs serif h2" style="left:880px; top:150px">One morning,<br>eight threats.</div>
+    <div class="abs" style="left:880px; top:440px; display:grid; grid-template-columns: 420px 420px; row-gap:60px">
+      <div><div class="stat" id="c0">0</div><div class="statlbl">threats found</div></div>
+      <div><div class="stat" id="c1" style="color:var(--mint)">0</div><div class="statlbl">stopped on their own</div></div>
+      <div><div class="stat" id="c2" style="color:var(--amber)">0</div><div class="statlbl">waits for Rose</div></div>
+      <div><div class="stat" id="c3" style="color:#FF8A80">0</div><div class="statlbl">alerts to Sam</div></div>
+    </div>
+  </div>
+
+  <!-- 5. Live call -->
+  <div class="scene" id="sc5">
+    <div class="abs phone" style="left:700px; top:60px">
+      <div class="island" id="isl"><div class="dot" id="isldot"></div><span id="isltxt">Guardian is listening</span></div>
+      <div style="position:absolute; top:130px; width:100%; text-align:center; color:#9FB3AB; font-size:26px">Unknown caller · +1-555-0123</div>
+      <div class="bubble" id="b0" style="top:230px">Grandma, it’s me.</div>
+      <div class="bubble rose" id="b1" style="top:340px">Who is this? You sound different.</div>
+      <div class="bubble" id="b2" style="top:470px">I need bail money today. Please don’t tell mom.</div>
+      <div class="bubble" id="b3" style="top:620px">Go buy gift cards and read me the numbers.</div>
+      <div id="blocked" style="position:absolute; left:26px; right:26px; bottom:60px; border-radius:26px; background:#0B6E4F; padding:24px; font-size:26px; font-weight:700; text-align:center">Blocked. Sam (daughter) was told.</div>
+    </div>
+    <div class="abs serif" id="nine" style="left:1330px; top:330px; font-size:200px; font-weight:700; color:var(--mint)">9 s</div>
+    <div class="abs lead" id="ninel" style="left:1340px; top:580px; width:460px">warning before the gift-card ask</div>
+    <div class="abs serif h2" id="livet" style="left:120px; top:380px; width:520px">When the scammer calls live</div>
+  </div>
+
+  <!-- 6. Trust -->
+  <div class="scene" id="sc6">
+    <div class="abs serif h2" style="left:160px; top:150px">Shows its work. Earns trust.</div>
+    <div class="abs card" id="t0" style="left:160px; top:380px; width:500px; height:420px; padding:48px"><div class="tile sm">{{FaBrain}}</div><div style="font-size:38px; font-weight:700; margin-top:36px">AI can raise concern, never clear it</div></div>
+    <div class="abs card" id="t1" style="left:710px; top:380px; width:500px; height:420px; padding:48px"><div class="tile sm">{{FaUserCheck}}</div><div style="font-size:38px; font-weight:700; margin-top:36px">A live human check before a card lock</div></div>
+    <div class="abs card" id="t2" style="left:1260px; top:380px; width:500px; height:420px; padding:48px"><div class="tile sm">{{FaUsers}}</div><div style="font-size:38px; font-weight:700; margin-top:36px">Trusted contact told only with consent</div></div>
+  </div>
+
+  <!-- 7. Close -->
+  <div class="scene" id="sc7">
+    <div class="abs tile" id="logo7" style="left:890px; top:230px">{{FaShieldAlt}}</div>
+    <div class="abs serif" id="cl0" style="left:0; width:1920px; top:430px; text-align:center; font-size:84px; font-weight:700">Set it up once.</div>
+    <div class="abs lead" id="cl1" style="left:0; width:1920px; top:560px; text-align:center; font-size:46px">Guardian protects your identity, tells someone you trust, and shows its work.</div>
+    <div class="abs" id="cl2" style="left:0; width:1920px; top:700px; text-align:center; font-size:44px; font-weight:800; letter-spacing:16px; color:var(--mint)">GUARDIAN</div>
+  </div>
+
+  <div class="progress" id="prog"></div>
+</div>
+
+<script>
+// Scene start times (seconds). Each scene lasts until the next one; END closes the film.
+const START = {{STARTS}};
+const END = {{END}};
+const $ = (id) => document.getElementById(id);
+const clamp = (v) => Math.max(0, Math.min(1, v));
+const ease = (v) => { v = clamp(v); return 1 - Math.pow(1 - v, 3); };
+const p = (t, a, d) => ease((t - a) / d);           // 0..1 progress of an animation starting at a, lasting d
+function show(el, v, dy = 40, sc = 1) { el.style.opacity = v; el.style.transform = `translateY(${(1 - v) * dy}px) scale(${sc === 1 ? 1 : sc + (1 - sc) * v})`; }
+
+function renderAt(T) {
+  for (let i = 0; i < START.length; i++) {
+    const a = START[i], b = i + 1 < START.length ? START[i + 1] : END;
+    const fin = clamp((T - a) / 0.5), fout = i + 1 < START.length ? 1 - clamp((T - (b - 0.4)) / 0.4) : 1 - clamp((T - (END - 0.6)) / 0.6);
+    $("sc" + (i + 1)).style.opacity = Math.min(fin, fout);
+  }
+  $("prog").style.width = (100 * clamp(T / END)) + "%";
+
+  // 1
+  let t = T - START[0];
+  const lg = p(t, 0.1, 0.9); $("logo1").style.opacity = lg; $("logo1").style.transform = `scale(${0.5 + 0.5 * lg}) rotate(${(1 - lg) * -20}deg)`;
+  show($("brand1"), p(t, 0.6, 0.8), 20); show($("tag1"), p(t, 1.0, 0.9), 40);
+
+  // 2
+  t = T - START[1];
+  const n = 20.9 * p(t, 0.3, 2.2); $("loss").textContent = "$" + n.toFixed(1) + "B";
+  show($("lossl"), p(t, 1.2, 0.8)); show($("grow"), p(t, 2.6, 0.8));
+  for (let i = 0; i < 3; i++) { const v = p(t, 5.2 + i * 0.9, 0.7); $("ch" + i).style.opacity = v; $("ch" + i).style.transform = `translateX(${(1 - v) * 120}px)`; }
+  show($("src2"), p(t, 1.5, 0.8), 0);
+
+  // 3
+  t = T - START[2];
+  show($("rose"), p(t, 0.1, 0.8), 60);
+  for (let i = 0; i < 5; i++) {
+    const v = p(t, 1.4 + i * 0.85, 0.5), el = $("st" + i), ck = el.firstElementChild;
+    el.style.opacity = 0.25 + 0.75 * v;
+    const on = t > 1.4 + i * 0.85 + 0.25;
+    ck.style.background = on ? "#0B6E4F" : "transparent"; ck.style.borderColor = on ? "#0B6E4F" : "#1F4A3F"; ck.style.color = on ? "#fff" : "#8FA59C"; ck.textContent = on ? "✓" : String(i + 1);
+  }
+  show($("under5"), p(t, 6.0, 0.6), 20);
+
+  // 4
+  t = T - START[3];
+  for (let i = 0; i < 5; i++) {
+    const v = p(t, 0.6 + i * 1.5, 0.6), el = $("n" + i);
+    const shown = Math.min(4, Math.max(0, Math.floor((t - 0.6) / 1.5)));
+    const slot = shown - i;                    // newest on top, older ones push down
+    el.style.top = (360 + Math.max(0, slot) * 118) + "px";
+    el.style.opacity = v; el.style.transform = `translateY(${(1 - v) * -60}px) scale(${0.92 + 0.08 * v})`;
+  }
+  const cnt = (id, to, a) => { $(id).textContent = Math.round(to * p(t, a, 1.2)); };
+  cnt("c0", 8, 1.0); cnt("c1", 5, 3.0); cnt("c2", 1, 5.5); cnt("c3", 3, 7.0);
+
+  // 5
+  t = T - START[4];
+  show($("livet"), p(t, 0, 0.6), 30);
+  [0.9, 1.9, 2.9, 5.0].forEach((a, i) => show($("b" + i), p(t, a, 0.4), 20));
+  $("b3").style.textDecoration = t > 5.6 ? "line-through" : "none"; $("b3").style.opacity = t > 5.6 ? 0.45 : $("b3").style.opacity;
+  let col = "#3FB98A", txt = "Guardian is listening", w = 380;
+  if (t > 1.4) { col = "#E0A100"; txt = "Unknown caller claims family"; w = 440; }
+  if (t > 3.3) { col = "#D0453F"; txt = "Hang up. They are asking for money or gift cards."; w = 470; }
+  $("isldot").style.background = col; $("isltxt").textContent = txt; $("isl").style.borderColor = t > 3.3 ? col : "transparent";
+  $("isl").style.width = w + "px"; $("isltxt").style.fontSize = t > 3.3 ? "17px" : "22px";
+  show($("blocked"), p(t, 6.2, 0.5), 30);
+  show($("nine"), p(t, 3.6, 0.7), 30, 0.7); show($("ninel"), p(t, 4.0, 0.6), 20);
+
+  // 6
+  t = T - START[5];
+  for (let i = 0; i < 3; i++) show($("t" + i), p(t, 0.8 + i * 1.6, 0.7), 60);
+
+  // 7
+  t = T - START[6];
+  const l7 = p(t, 0.1, 0.8); $("logo7").style.opacity = l7; $("logo7").style.transform = `scale(${0.6 + 0.4 * l7})`;
+  show($("cl0"), p(t, 0.4, 0.7)); show($("cl1"), p(t, 1.3, 0.8)); show($("cl2"), p(t, 2.6, 0.8), 0);
+}
+window.renderAt = renderAt; window.FILM_END = END;
+// Opened in a normal browser, it plays itself (and loops).
+if (!navigator.webdriver) { const t0 = performance.now(); (function loop(now) { renderAt(((now - t0) / 1000) % END); requestAnimationFrame(loop); })(t0); }
+else renderAt(0);
+</script>
+</body>
+</html>

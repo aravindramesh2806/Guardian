@@ -1,7 +1,9 @@
 # Guardian
 
-A personal security agent that watches a person's digital life every day, acts on threats before they
-cost money, tells their family when something serious happens, and shows the evidence behind every step.
+A personal security agent for anyone with a digital identity: an email address, online accounts, a phone
+number and a card that are out on the internet. It watches that identity every day, acts on threats before
+they cost money, tells someone the person trusts when something serious happens, and shows the evidence
+behind every step.
 
 Built for the Personal Agents Hackathon (tokens&, November 20, 2026). Brief: a personal agent that uses
 reliable context, takes a meaningful action, and shows the information and steps behind what it did.
@@ -10,13 +12,16 @@ reliable context, takes a meaningful action, and shows the information and steps
 
 | Threat | How it is spotted | What Guardian does on its own | What waits for the person |
 |---|---|---|---|
-| Scam calls, voicemails and texts | Spoofed caller ID, requests for gift cards, codes or "safe accounts", secrecy, "it's me, grandma" from unknown numbers, pay-by-link texts | Blocks the number, warns the person with exact steps, tells a trusted family member (with consent) | Nothing |
+| Scam calls, voicemails and texts | Spoofed caller ID, requests for gift cards, codes or "safe accounts", secrecy, "it's me, I'm in trouble" or "new number" from unknown numbers, pay-by-link texts | Blocks the number, warns the person with exact steps, tells a trusted contact (with consent) | Nothing |
 | Card misuse | A charge with no receipt at a merchant they never use | Locks the card (only after a verified-human check) | Confirming the dispute |
 | Account takeover | A reset, sign-in or code email they did not start | Alert with exact steps | Changing the password |
 | Phishing | Lookalike sender, pressure, a link to another domain, a login request | Quarantines the email | Nothing |
 | Data leaks | Their email in a breach, or a breach at a store they bought from | Alert with steps; locks the card used at a breached store | Changing passwords |
 
-Senior protection mode lowers the bar for calls, because older adults are targeted most.
+Guardian is for everyone, at any age: students, busy professionals, parents, retirees. Extra-care mode
+(the `senior_protection` gate) lowers the bar for calls and texts for anyone who wants a closer watch, such
+as someone being actively targeted or new to a channel. It is an opt-in switch in setup, off by default for
+everyone, whatever their age.
 
 ## Run it
 
@@ -27,6 +32,7 @@ python3 agent/demo.py      # before a demo: reset the store, run, build both pag
 npm install               # Statsig web SDK (only needed to refresh web/vendor/statsig.min.js)
 python3 agent/run.py      # detect, decide, act, record
 python3 agent/brief.py    # daily brief + web/report.html
+python3 agent/settings.py set auto_lock_card off   # your own changes; lowering protection needs Persona
 python3 agent/live.py     # replay a live scam call + web/live.html (Dynamic Island warning)
 (cd persona && npm install && npm test)   # Persona Relay sidecar; `node persona/server.js` with PERSONA_API_KEY set
 python3 agent/run.py --approve dispute:tx-4   # say yes to one held action, then run
@@ -79,6 +85,41 @@ python3 -m venv .venv && .venv/bin/pip install -r app/requirements.txt
   "What Guardian reads and keeps" page (`/privacy`) says this in plain words.
 - **Tests:** `.venv/bin/python -m unittest discover -s tests -t .` and the browser test `tests/e2e_app.js`.
 
+- **Sign-up:** anyone with the address can sign up, with a name, an email and a passkey. Guardian emails a
+  6-digit code (stored only as a hash; 15 minutes; 5 tries; at most one a minute and five an hour); nothing
+  works until it is entered, and accounts not confirmed within 24 hours are deleted by the worker. One
+  confirmed account per email. Sign-ups are limited per address (`GUARDIAN_SIGNUPS_PER_HOUR`, default 10;
+  set `GUARDIAN_TRUST_PROXY=1` behind a tunnel so the limit sees real addresses).
+- **Suspected scams: tell first, then act or offer.** Each suspected scam's alert goes out the moment it is
+  found, before Guardian blocks, quarantines or locks anything. The push names the threat and who it's from
+  ("Likely scam voicemail. From +1-555-0100. Don't call back, pay or share a code."), never the message.
+  Buttons: in "Just tell me", **Block number** / **Move out of inbox** / **Lock card** (confirmed with
+  Face ID in the app) and **See details**; in "Act for me", **It was real** (undo) and **See details**;
+  in shadow mode or paused, **See details** only. At most 3 such pushes per check, then "And N more".
+  On a live call, Guardian warns first and then offers **Block this number** or **I know this caller**.
+- **Alerts while the app is closed (Web Push):** Settings > "Turn on alerts on this device". A push only says
+  "Guardian found 2 new things", never message text, and is encrypted end to end for that device. On iPhone,
+  add Guardian to the Home Screen first (Safari > Share > Add to Home Screen, iOS 16.4+).
+
+### On your phone: a public HTTPS address with a tunnel
+
+Passkeys and push need HTTPS and a **permanent** address (passkeys are tied to it). Either:
+
+- **ngrok** (free static domain): sign up, claim a domain under Domains, then
+  `ngrok config add-authtoken <token>` and `ngrok http --url=<your-domain>.ngrok-free.app 8800`.
+- **Cloudflare Tunnel** (your own domain): `cloudflared tunnel login`, `cloudflared tunnel create guardian`,
+  `cloudflared tunnel route dns guardian guardian.<yourdomain>`, `cloudflared tunnel run --url http://localhost:8800 guardian`.
+
+Then start the app with the address:
+
+```bash
+GUARDIAN_ORIGIN=https://<address> GUARDIAN_RP_ID=<address> GUARDIAN_TRUST_PROXY=1 .venv/bin/python app/server.py
+```
+
+Create a new account on the new address (passkeys made on localhost don't carry over), add
+`https://<address>/oauth/google/callback` to the Google OAuth client's redirect URIs, and set up SMTP so
+codes reach people's inboxes.
+
 ### Connecting Gmail (Google Cloud, about 15 minutes)
 
 1. <https://console.cloud.google.com/> > create a project (e.g. "Guardian").
@@ -115,7 +156,7 @@ family alerts, disputes). Replacing one with a real integration changes only its
 | Amplitude | Audit trail: every detect, guard and act step is an event, with the run's gate values | **Live and verified** with `AMPLITUDE_API_KEY` |
 | SingleStore | Threats and actions store (the "never repeat" check) | **Live and verified** when `SINGLESTORE_*` is set (Data API, two runs: 8 new threats, then 0); SQLite otherwise |
 | Superlinked SIE | Borderline phishing and call checks; alert drafting with a fact guard | Live when `SIE_*` is set; rules and templates otherwise. Endpoint shape not yet verified |
-| Persona Relay | `live_human_presence` check before Guardian may lock a card | **Live and verified** (sandbox, 2026-11-20): `persona/` sidecar, run on a laptop browser (Persona's widget blocks headless browsers), wrote `result: passed` to `data/verification.json`. A pass counts for 24 hours |
+| Persona Relay | `live_human_presence` check before Guardian may lock a card (pass under 24 hours), and before the person turns protection down, changes trusted contacts, unlocks a card or releases a quarantined email (pass under 15 minutes, `agent/settings.py`) | **Live and verified** (sandbox, 2026-11-20): `persona/` sidecar, run on a laptop browser (Persona's widget blocks headless browsers), wrote `result: passed` to `data/verification.json` |
 | Firedrill | Synthetic Gmail (inbox, quarantine), Stripe (card charges) and Slack (family alerts) for drills | Wired in (`agent/firedrill.py`) when `GUARDIAN_GMAIL_URL`, `GUARDIAN_STRIPE_URL`, `GUARDIAN_SLACK_URL` are set; tested against a local fake. Operation names not yet confirmed with `firedrill tools catalog-operations` |
 | Statsig (web) | Report page: session replay, auto-capture analytics, `guardian_report_viewed` and `guardian_threat_opened` events | **Live and verified** with `STATSIG_CLIENT_KEY` (initialize 200, events 202) |
 | Statsig (gates) | `senior_protection`, auto-block, auto-quarantine, auto-lock, disputes, family alerts, kill switch; every gate's value and source goes into each Amplitude event | **Live and verified** when `STATSIG_SERVER_SECRET` is set (`agent/flags.py`, all 7 gates read as `statsig`); `data/gates.json` otherwise |

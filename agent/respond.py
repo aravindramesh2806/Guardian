@@ -61,7 +61,11 @@ STEPS = {
         "Real family can wait while you check: call them on the number you already have.",
     ],
     "suspicious": ["Do not click links or call back until you have checked who it is."],
-    "phishing": [],
+    "phishing": [
+        "Do not click links or open attachments in that email.",
+        "If you already typed a password after clicking, change it now on the real site or app.",
+        "If it asks you to act, check by opening the company's app or typing its address yourself.",
+    ],
 }
 
 
@@ -70,32 +74,40 @@ def card(profile, card_id):
 
 
 def decide(threat, profile):
-    """The actions this threat calls for, in order."""
+    """The actions this threat calls for, in order. The alert always comes first: the person hears about a
+    suspected scam before Guardian blocks, quarantines or locks anything."""
     ev = threat["evidence"]
+    alert = {"type": "alert", "key": "alert:" + threat["key"]}
     if threat["kind"] == "phishing":
-        return [{"type": "quarantine", "key": "quarantine:" + ev["email"], "email": ev["email"]}]
+        return [alert, {"type": "quarantine", "key": "quarantine:" + ev["email"], "email": ev["email"],
+                        "from": ev.get("from", "")}]
     if threat["kind"] == "scam_call":
-        acts = [{"type": "block_number", "key": "block:" + ev["from"], "number": ev["from"]},
-                {"type": "alert", "key": "alert:" + threat["key"]}]
+        acts = [alert, {"type": "block_number", "key": "block:" + ev["from"], "number": ev["from"]}]
         for c in profile.get("trusted_contacts", []):
             acts.append({"type": "notify_trusted", "key": "notify:%s:%s" % (c["address"], threat["key"]),
                          "contact": c})
         return acts
     if threat["kind"] == "card_misuse" and ev.get("small"):
         # A small unknown charge is more often parking than fraud: ask before locking, no dispute.
-        return [{"type": "lock_card", "key": "lock:" + ev["card"], "card": ev["card"], "ask_first": True,
-                 "merchant": ev["merchant"], "amount": ev["amount"]},
-                {"type": "alert", "key": "alert:" + threat["key"]}]
+        return [alert, {"type": "lock_card", "key": "lock:" + ev["card"], "card": ev["card"], "ask_first": True,
+                        "merchant": ev["merchant"], "amount": ev["amount"]}]
     if threat["kind"] in ("merchant_breach", "card_misuse"):
-        acts = [{"type": "lock_card", "key": "lock:" + ev["card"], "card": ev["card"]}]
+        acts = [alert, {"type": "lock_card", "key": "lock:" + ev["card"], "card": ev["card"]}]
         if threat["kind"] == "card_misuse":
             acts.append({"type": "dispute", "key": "dispute:" + ev["transaction"], "transaction": ev["transaction"],
                          "card": ev["card"], "merchant": ev["merchant"], "amount": ev["amount"], "date": ev["date"]})
-        return acts + [{"type": "alert", "key": "alert:" + threat["key"]}]
-    return [{"type": "alert", "key": "alert:" + threat["key"]}]
+        return acts
+    return [alert]
 
 
 CLAIM_MAX_AGE = timedelta(hours=24)
+# Turning protection down, changing who gets family alerts, or undoing a lock or quarantine needs a pass
+# from the last few minutes: someone who has taken over the account would do exactly these things first.
+REQUEST_MAX_AGE = timedelta(minutes=15)
+
+# Each setting's safe value. Moving a setting TO it never needs a check; moving it away does.
+SAFE = {"senior_protection": True, "auto_quarantine": True, "auto_block_numbers": True, "auto_lock_card": True,
+        "notify_trusted_contacts": True, "dispute_needs_approval": True, "kill_switch": False}
 
 
 def _parse_time(ts):
@@ -104,13 +116,48 @@ def _parse_time(ts):
     return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
 
 
-def claim_fresh(verification, now):
-    """A Persona pass counts for 24 hours. Missing, unreadable or future times do not count."""
+def claim_fresh(verification, now, max_age=CLAIM_MAX_AGE):
+    """A Persona pass counts for `max_age` (24 hours by default). Missing, unreadable or future times do not count."""
     try:
         age = _parse_time(now) - _parse_time(verification["checked_at"])
     except (KeyError, TypeError, ValueError):
         return False
-    return timedelta(minutes=-5) <= age <= CLAIM_MAX_AGE
+    return timedelta(minutes=-5) <= age <= max_age
+
+
+def persona_ok(verification, now, max_age=CLAIM_MAX_AGE):
+    """Is there a passed Persona check, fresh enough? Returns (ok, reason). `now` None skips the time check."""
+    if verification.get("result") != "passed":
+        return False, "no verified person behind this agent yet (Persona check not passed)"
+    if now is not None and not claim_fresh(verification, now, max_age):
+        if max_age == CLAIM_MAX_AGE:
+            return False, "the Persona check is more than 24 hours old; verify again"
+        return False, "this change needs a Persona check from the last %d minutes; verify again" % (
+            max_age.total_seconds() // 60)
+    return True, "verified person"
+
+
+def guard_request(request, verification, now):
+    """May the person's own change go ahead? Returns (allowed, reason).
+
+    The kill switch does not apply here: these are the person's requests, not Guardian acting alone,
+    and the person must always be able to turn Guardian back on.
+    """
+    kind = request["type"]
+    if kind == "change_setting":
+        gate, value = request["gate"], request["value"]
+        if gate not in SAFE or not isinstance(value, bool):
+            return False, "unknown setting"
+        if value == SAFE[gate]:
+            return True, "makes Guardian safer; no check needed"
+        ok, reason = persona_ok(verification, now, REQUEST_MAX_AGE)
+        return (True, "verified person just now; protection turned down at their request") if ok else (False, reason)
+    if kind in ("change_contact", "unlock_card", "release_quarantine"):
+        ok, reason = persona_ok(verification, now, REQUEST_MAX_AGE)
+        what = {"change_contact": "who hears about scams changed", "unlock_card": "card unlocked",
+                "release_quarantine": "email released"}[kind]
+        return (True, "verified person just now; %s at their request" % what) if ok else (False, reason)
+    return False, "unknown request"
 
 
 def guard(action, gates, verification, profile, now=None, approved=()):
@@ -122,9 +169,14 @@ def guard(action, gates, verification, profile, now=None, approved=()):
         return True, "alerts always go to you"
     if gates.get("kill_switch"):
         return False, "kill switch is on; nothing runs without you"
+    said_yes = action["key"] in approved
     if action["type"] == "quarantine":
+        if said_yes:
+            return True, "you said yes"
         return (True, "auto-quarantine is on") if gates.get("auto_quarantine") else (False, "auto-quarantine is off")
     if action["type"] == "block_number":
+        if said_yes:
+            return True, "you said yes"
         return (True, "auto-block is on") if gates.get("auto_block_numbers") else (False, "auto-block is off")
     if action["type"] == "notify_trusted":
         if not action["contact"].get("consent"):
@@ -135,11 +187,10 @@ def guard(action, gates, verification, profile, now=None, approved=()):
     if action["type"] == "lock_card":
         if action.get("ask_first") and action["key"] not in approved:
             return False, "a small charge you may have made: Guardian asks before locking your card"
-        if verification.get("result") != "passed":
-            return False, "no verified person behind this agent yet (Persona check not passed)"
-        if now is not None and not claim_fresh(verification, now):
-            return False, "the Persona check is more than 24 hours old; verify again"
-        if not gates.get("auto_lock_card"):
+        ok, reason = persona_ok(verification, now)
+        if not ok:
+            return False, reason
+        if not gates.get("auto_lock_card") and not said_yes:
             return False, "auto-lock is off"
         c = card(profile, action["card"])
         if not c or not c.get("issuer_lock_api"):
@@ -154,13 +205,23 @@ def guard(action, gates, verification, profile, now=None, approved=()):
     return False, "unknown action"
 
 
+def _fill(ev, profile):
+    c = card(profile, ev.get("card", "")) or {}
+    return {"domains": ", ".join(ev.get("domains", [])), "account": ev.get("account", ""),
+            "last4": c.get("last4", ""), "merchant": ev.get("merchant", ""), "amount": ev.get("amount", 0)}
+
+
+def steps_for(kind, ev, profile):
+    """The person's own steps for one threat, in plain words."""
+    fill = _fill(ev, profile)
+    return [s.format(**fill) for s in STEPS.get(kind, [])]
+
+
 def alert_text(threat, profile):
     """Plain-language alert with exact steps. Returns (text, drafted_by)."""
     ev = threat["evidence"]
-    c = card(profile, ev.get("card", "")) or {}
-    fill = {"domains": ", ".join(ev.get("domains", [])), "account": ev.get("account", ""),
-            "last4": c.get("last4", ""), "merchant": ev.get("merchant", ""), "amount": ev.get("amount", 0)}
-    steps = [s.format(**fill) for s in STEPS.get(threat["kind"], [])]
+    fill = _fill(ev, profile)
+    steps = steps_for(threat["kind"], ev, profile)
     fallback = threat["summary"] + "." + "".join("\n  %d. %s" % (i + 1, s) for i, s in enumerate(steps))
     facts = {"what_happened": threat["summary"], "evidence": ev, "steps": steps}
     must = {"identity_breach": [fill["domains"]], "takeover": [fill["account"]],
@@ -250,4 +311,14 @@ def held(action, threat, profile, reason):
         return {"status": "waiting for you", "reason": reason,
                 "ask": "Lock card ending %s? You may not recognise $%.2f at %s." % (
                     card(profile, action["card"])["last4"], action["amount"], action["merchant"])}
+    # Held only because the person chose "Just tell me": offer the action as one tap instead.
+    if action["type"] == "block_number" and reason == "auto-block is off":
+        return {"status": "waiting for you", "reason": reason,
+                "ask": "Block %s? Guardian thinks it's a scam." % action["number"]}
+    if action["type"] == "quarantine" and reason == "auto-quarantine is off":
+        return {"status": "waiting for you", "reason": reason,
+                "ask": "Move the email from %s out of your inbox? Guardian thinks it's fake." % (action.get("from") or "this sender")}
+    if action["type"] == "lock_card" and reason == "auto-lock is off":
+        return {"status": "waiting for you", "reason": reason,
+                "ask": "Lock card ending %s?" % ((card(profile, action["card"]) or {}).get("last4", "?"))}
     return {"status": "waiting for you", "reason": reason}

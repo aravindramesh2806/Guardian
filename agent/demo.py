@@ -54,7 +54,7 @@ def main():
     shutil.rmtree(outbox, ignore_errors=True)
     print(refresh_stand_in(os.path.join(ROOT, "data", "verification.json"), datetime.now()))
     s = runner.run()
-    print("run: %d threats, %d new, %d stopped, %d family told, %d waiting for you (store: %s)" % (
+    print("run: %d threats, %d new, %d stopped, %d trusted contact told, %d waiting for you (store: %s)" % (
         s["threats"], s["new_threats"], s["stopped"], s["family_told"], s["waiting_for_you"], s["store"]))
     print("\n".join(brief.brief_lines(s)))
     print(brief.report(s, runs, os.path.join(ROOT, "web", "report.html")))

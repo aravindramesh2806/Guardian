@@ -83,7 +83,7 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://localhost:8800/api/me && exit 0; sleep 1; done
           cat "$RUNNER_TEMP/server.log"; exit 1
       - name: Sign up, set up, approve, undo, pause, sign in again, delete
-        run: node tests/e2e_app.js "$RUNNER_TEMP/shots"
+        run: node tests/e2e_app.js "$RUNNER_TEMP/shots" "$RUNNER_TEMP/users"
       - name: Upload screenshots and server log
         if: always()
         uses: actions/upload-artifact@v4

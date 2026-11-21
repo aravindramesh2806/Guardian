@@ -8,6 +8,8 @@ thread and request threads at once.
 Until Gmail is connected, a new workspace runs on the fictional sample data in data/, clearly labelled.
 The workspace store is always local SQLite: a shared SingleStore needs per-user partitioning first.
 """
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -23,6 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import gmail  # noqa: E402
+import mailer  # noqa: E402
 import vault  # noqa: E402
 from agent import respond  # noqa: E402
 from agent import run as runner  # noqa: E402
@@ -99,8 +102,30 @@ def save(uid, meta):
     _write(_dir(uid, "meta.json"), meta)
 
 
-def create_user(name, credential):
-    """A new person with one passkey. Returns their id."""
+EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
+CODE_MINUTES, CODE_TRIES, UNVERIFIED_HOURS = 15, 5, 24
+
+
+def clean_email(email):
+    email = str(email or "").strip()
+    if len(email) > 254 or not EMAIL_RE.fullmatch(email):
+        raise AppError("Please enter a valid email address.")
+    return email.lower()
+
+
+def email_in_use(email):
+    """Is this address already a verified Guardian account? (Unverified ones expire, so they don't count.)"""
+    email = clean_email(email)
+    for uid in all_users():
+        meta = _read(_dir(uid, "meta.json"), {})
+        if meta.get("email_verified") and meta.get("email") == email:
+            return True
+    return False
+
+
+def create_user(name, credential, email):
+    """A new person with one passkey, not usable until their email is confirmed. Returns their id."""
+    email = clean_email(email)
     uid = secrets.token_hex(16)
     with _lock(uid):
         shutil.copytree(SAMPLE, _dir(uid, "data"))
@@ -111,7 +136,8 @@ def create_user(name, credential):
         save(uid, {"id": uid, "name": _clean_name(name), "created": _now(), "setup_done": False,
                    "who": "me", "mode": "tell", "paused": False, "family": None, "data_source": "sample",
                    "credentials": [credential], "test_alert_at": None, "last_run": None, "last_error": None,
-                   "gmail": None, "shadow": False, "accounts": []})
+                   "gmail": None, "shadow": False, "accounts": [], "email": email, "email_verified": False,
+                   "email_code": None, "push": []})
         _index_add(credential["id"], uid)
         _apply_settings(uid)
     return uid
@@ -172,6 +198,159 @@ def all_users():
     return [d for d in os.listdir(USERS) if re.fullmatch(r"[0-9a-f]{32}", d)]
 
 
+# ---------- email check at sign-up ----------
+
+def _hash_code(code, salt):
+    return hashlib.sha256((salt + ":" + code).encode()).hexdigest()
+
+
+def issue_code(uid, now=None):
+    """Email a fresh 6-digit code. At most one a minute and five an hour. Returns the code (for tests only:
+    the server never shows it)."""
+    now = now or time.time()
+    with _lock(uid):
+        meta = load(uid)
+        if meta.get("email_verified"):
+            raise AppError("Your email is already confirmed.")
+        state = meta.get("email_code") or {}
+        sent = [t for t in state.get("sent", []) if now - t < 3600]
+        if sent and now - sent[-1] < 60:
+            raise AppError("Please wait a minute before asking for another code.")
+        if len(sent) >= 5:
+            raise AppError("Too many codes in the last hour. Please try again later.")
+        code, salt = "%06d" % secrets.randbelow(10 ** 6), secrets.token_hex(8)
+        meta["email_code"] = {"hash": _hash_code(code, salt), "salt": salt, "expires": now + CODE_MINUTES * 60,
+                              "attempts": 0, "sent": sent + [now]}
+        save(uid, meta)
+    mailer.send(meta["email"], "Your Guardian code: %s" % code,
+                "Your Guardian code is %s.\n\nIt expires in %d minutes. Enter it in Guardian to finish signing up.\n\n"
+                "If you didn't sign up for Guardian, ignore this email: the account is deleted after %d hours.\n"
+                "Guardian will never ask you for this code by phone, text or email."
+                % (code, CODE_MINUTES, UNVERIFIED_HOURS))
+    return code
+
+
+def verify_code(uid, code, now=None):
+    now = now or time.time()
+    with _lock(uid):
+        meta = load(uid)
+        if meta.get("email_verified"):
+            return True
+        state = meta.get("email_code")
+        if not state or now > state["expires"]:
+            raise AppError("That code has expired. Ask for a new one.")
+        if state["attempts"] >= CODE_TRIES:
+            raise AppError("Too many wrong codes. Ask for a new one.")
+        code = re.sub(r"\D", "", str(code or ""))
+        if not hmac.compare_digest(_hash_code(code, state["salt"]), state["hash"]):
+            state["attempts"] += 1
+            save(uid, meta)
+            left = CODE_TRIES - state["attempts"]
+            raise AppError("That code isn't right. %s" % ("%d tries left." % left if left else "Ask for a new one."))
+        if email_in_use(meta["email"]):
+            raise AppError("That email already has a Guardian account. Sign in to it instead.")
+        meta["email_verified"], meta["email_code"] = True, None
+        save(uid, meta)
+        return True
+
+
+def purge_unverified(now=None):
+    """Delete accounts whose email was never confirmed within 24 hours. Returns how many."""
+    now = now or datetime.now()
+    removed = 0
+    for uid in all_users():
+        meta = _read(_dir(uid, "meta.json"), {})
+        if meta.get("email_verified") or not meta.get("created"):
+            continue
+        if now - datetime.fromisoformat(meta["created"]) > timedelta(hours=UNVERIFIED_HOURS):
+            delete_user(uid)
+            removed += 1
+    return removed
+
+
+# ---------- alerts while the app is closed ----------
+
+def add_push(uid, sub):
+    """Remember one device's push subscription (from the browser's PushManager)."""
+    if not isinstance(sub, dict) or not str(sub.get("endpoint", "")).startswith("https://") \
+            or not (sub.get("keys") or {}).get("p256dh") or not (sub.get("keys") or {}).get("auth"):
+        raise AppError("This device couldn't turn on alerts.")
+    clean = {"endpoint": sub["endpoint"][:1000], "keys": {"p256dh": sub["keys"]["p256dh"][:200],
+                                                         "auth": sub["keys"]["auth"][:100]}}
+    with _lock(uid):
+        meta = load(uid)
+        subs = [x for x in meta.get("push", []) if x["endpoint"] != clean["endpoint"]]
+        meta["push"] = (subs + [clean])[-10:]
+        save(uid, meta)
+
+
+def notify(uid, title, body, data=None, sender=None):
+    """Push to every device this person turned alerts on for; forget devices that unsubscribed.
+
+    `data` rides along to the device: which threat it is and which buttons to show.
+    """
+    meta = load(uid)
+    if not meta.get("push"):
+        return 0
+    if sender is None:
+        try:
+            import push
+            sender = push.send
+        except ImportError:  # pywebpush not installed: no push
+            return 0
+    keep, sent = [], 0
+    for sub in meta["push"]:
+        result = sender(sub, title, body, data)
+        if result != "gone":
+            keep.append(sub)
+        sent += result == "ok"
+    if len(keep) != len(meta["push"]):
+        with _lock(uid):
+            meta = load(uid)
+            meta["push"] = keep
+            save(uid, meta)
+    return sent
+
+
+MAX_SCAM_PUSHES = 3  # per check; anything beyond goes into one "and N more" push
+
+
+def scam_alert(threat, mode, hands_off):
+    """The push for one suspected scam: (title, body, buttons). Says who it's from, never the message itself.
+
+    "Just tell me": the first button does the protective step (block, move aside, lock) after a Face ID check.
+    "Act for me": Guardian is already doing it, so the first button undoes it ("It was real").
+    Shadow mode or paused (`hands_off`): Guardian does nothing, so the only button is "See details".
+    """
+    ev, kind = threat["evidence"], threat["kind"]
+    act = None
+    if kind == "scam_call":
+        what = {"sms": "text", "voicemail": "voicemail"}.get(ev.get("kind"), "call")
+        title = "Likely scam %s" % what
+        body = "From %s. Don't call back, pay or share a code." % ev.get("from", "an unknown number")
+        act = "Block number"
+    elif kind == "phishing":
+        title, body, act = "Likely fake email", "From %s. Don't click its links." % ev.get("from", "a stranger"), "Move out of inbox"
+    elif kind == "takeover":
+        title = "Someone tried to get into your %s account" % ev.get("account", "")
+        body = "If it wasn't you, change your password. Don't use links in that email."
+    elif kind == "card_misuse":
+        title = "Charge you may not recognise"
+        body = "$%.2f at %s." % (ev.get("amount", 0), ev.get("merchant", "a new merchant"))
+        act = "Lock card"
+    else:
+        title, body = "Guardian: heads up", "Tap to see what Guardian found."
+    buttons = []
+    if act and not hands_off:
+        if mode == "act" and not (kind == "card_misuse" and ev.get("small")):
+            body += " Guardian is acting on it now."
+            buttons.append({"action": "undo", "title": "It was real"})
+        else:
+            buttons.append({"action": "act", "title": act})
+    buttons.append({"action": "read", "title": "See details"})
+    return title, body, buttons
+
+
 # ---------- set up once ----------
 
 def _apply_settings(uid):
@@ -196,7 +375,10 @@ def _apply_settings(uid):
 
 
 def setup(uid, who, protected_name, family_name, family_phone, mode, senior):
-    """The one-time setup. Family members are added as "waiting for their YES"."""
+    """The one-time setup. A trusted person is saved as "not invited": nothing is sent to them from here.
+
+    The invite goes out from send_invite, after a fresh passkey and Persona check (L6).
+    """
     if who not in ("me", "family"):
         raise AppError("Choose who Guardian protects.")
     if mode not in MODES:
@@ -206,16 +388,54 @@ def setup(uid, who, protected_name, family_name, family_phone, mode, senior):
         meta["who"] = who
         meta["protected_name"] = _clean_name(protected_name, "name") if who == "family" else None
         meta["mode"], meta["senior"] = mode, bool(senior)
-        meta["family"] = None
+        before, meta["family"] = meta.get("family"), None
         if family_name or family_phone:
             phone = re.sub(r"[^\d+]", "", str(family_phone or ""))
             if not re.fullmatch(r"\+?\d{7,15}", phone):
                 raise AppError("Please enter a phone number with 7 to 15 digits.")
-            meta["family"] = {"name": _clean_name(family_name, "name"), "phone": phone, "status": "waiting"}
+            name = _clean_name(family_name, "name")
+            if before and before["phone"] == phone:
+                meta["family"] = dict(before, name=name)  # same number: keep their invite and their YES
+            else:
+                meta["family"] = {"name": name, "phone": phone, "status": "not invited", "invited_at": None}
         meta["setup_done"] = True
         save(uid, meta)
         _apply_settings(uid)
     return load(uid)
+
+
+def invite_text(meta):
+    """What the trusted person is sent. Plain, says who added them, and asks before anything else is sent."""
+    adder = meta["name"].split(" ")[0]
+    protected = (meta.get("protected_name") or meta["name"]).split(" ")[0]
+    return "%s added you to Guardian. If a scammer targets %s, we'll text you. Reply YES to agree." % (
+        adder, protected)
+
+
+def send_invite(uid):
+    """Text the trusted person the invite (simulated into the outbox, like every Guardian message).
+
+    The server asks for a fresh passkey first; this needs a Persona pass under 24 hours, so a stolen
+    session cannot point Guardian's scam alerts at a number of its own. Their consent stays "waiting"
+    until they reply YES.
+    """
+    with _lock(uid):
+        meta = load(uid)
+        fam = meta.get("family")
+        if not fam:
+            raise AppError("No one has been added yet.")
+        if fam["status"] == "agreed":
+            raise AppError("%s has already said yes." % fam["name"])
+        if not verification(uid)["fresh"]:
+            raise AppError("Please do the Persona check first. It lasts 24 hours.")
+        at = _now()
+        os.makedirs(_dir(uid, "outbox"), exist_ok=True)
+        with open(_dir(uid, "outbox", "family_invites.jsonl"), "a") as f:
+            f.write(json.dumps({"to": fam["phone"], "name": fam["name"], "text": invite_text(meta),
+                                "at": at, "simulated": True}) + "\n")
+        fam["status"], fam["invited_at"] = "waiting", at
+        save(uid, meta)
+        _apply_settings(uid)
 
 
 def family_said_yes(uid):
@@ -224,6 +444,8 @@ def family_said_yes(uid):
         meta = load(uid)
         if not meta.get("family"):
             raise AppError("No one has been added yet.")
+        if meta["family"]["status"] == "not invited":
+            raise AppError("Send them the invite first.")
         meta["family"]["status"] = "agreed"
         save(uid, meta)
         _apply_settings(uid)
@@ -385,11 +607,28 @@ def run_for(uid):
                 data_dir = os.path.join(work, "data")
                 shutil.copytree(_dir(uid, "data"), data_dir)
                 _write(os.path.join(data_dir, "inbox.json"), inbox)
+            pushed = {"scams": 0, "more": 0}
+            hands_off = bool(meta.get("paused") or meta.get("shadow"))
+
+            def on_alert(threat):
+                # Called the moment a threat's alert goes out, before any block, quarantine or lock.
+                if threat["severity"] not in ("critical", "high") or pushed["scams"] >= MAX_SCAM_PUSHES:
+                    pushed["more"] += 1
+                    return
+                title, body, buttons = scam_alert(threat, meta["mode"], hands_off)
+                notify(uid, title, body, {"threat": threat["key"], "actions": buttons})
+                pushed["scams"] += 1
+
             s = runner.run(data_dir=data_dir, run_dir=_dir(uid, "runs"), outbox_dir=_dir(uid, "outbox"),
-                           store=_store(uid), now=_now(), user_id=uid)
+                           store=_store(uid), now=_now(), user_id=uid, on_alert=on_alert)
             meta = load(uid)
             meta["last_run"], meta["last_error"] = _now(), None
             save(uid, meta)
+            if pushed["more"]:
+                n = pushed["more"]
+                lead = "And %d more" if pushed["scams"] else "Guardian found %d new"
+                notify(uid, "Guardian", (lead + " thing%s to look at. Tap to see.") % (n, "" if n == 1 else "s"),
+                       {"actions": [{"action": "read", "title": "See details"}]})
             return s
         except Exception as e:  # one person's failure must not stop the worker
             meta = load(uid)
@@ -415,9 +654,11 @@ def worker_ok(now=None):
 
 
 def check_everyone():
+    purge_unverified()
     for uid in all_users():
         try:
-            if load(uid).get("setup_done"):
+            meta = load(uid)
+            if meta.get("setup_done") and meta.get("email_verified"):
                 run_for(uid)
                 retention(uid)
         except AppError:
@@ -443,11 +684,52 @@ def _latest_summary(uid):
 
 
 HEADLINES = {"quarantine": "Moved to quarantine", "block_number": "Number blocked", "lock_card": "Card locked",
-             "dispute": "Dispute filed", "notify_trusted": "Family told"}
+             "dispute": "Dispute filed", "notify_trusted": "Trusted contact told"}
 
 
 FRIENDLY = {"quarantine": "Quarantine", "block_number": "Blocking the number", "lock_card": "Card lock",
-            "dispute": "Dispute", "notify_trusted": "Telling your family"}
+            "dispute": "Dispute", "notify_trusted": "Telling someone you trust"}
+
+# Things Guardian can do about a threat once the person confirms it's a scam. Telling family is not here:
+# that depends only on the family member's own YES.
+FIXABLE = ("block_number", "quarantine", "lock_card", "dispute")
+
+
+def _fix_label(action, evidence, profile):
+    """Plain words for one fix, e.g. "Block +1-555-0100" or "Lock card ending 4821"."""
+    target = action["key"].split(":", 1)[-1]
+    if action["action"] == "block_number":
+        return "Block " + target
+    if action["action"] == "quarantine":
+        return "Move this email out of your inbox"
+    if action["action"] == "lock_card":
+        c = respond.card(profile, target) or {}
+        return "Lock card ending " + c["last4"] if c.get("last4") else "Lock the card"
+    if action["action"] == "dispute":
+        if evidence.get("amount") is not None and evidence.get("merchant"):
+            return "Dispute $%.2f at %s" % (evidence["amount"], evidence["merchant"])
+        return "Dispute the charge"
+    return FRIENDLY.get(action["action"], action["action"])
+
+
+def _fixes(r, rows, profile):
+    """What Guardian could still do about one threat, and whether the person can say yes to it now."""
+    out, seen = [], set()
+    for a in r["actions"]:
+        if a["action"] not in FIXABLE or a["key"] in seen:
+            continue
+        seen.add(a["key"])
+        status = (rows.get(a["key"]) or {}).get("status") or a["status"]
+        reason = a.get("reason") or ""
+        done = respond.is_done(status)
+        # Paused or watch-only (kill switch), already approved, or something only the bank can do: no button.
+        can = (not done and status == "waiting for you" and not reason.startswith("kill switch")
+               and not reason.startswith("you approved it") and "no lock option" not in reason
+               and "Persona" not in reason)
+        out.append({"key": a["key"], "action": a["action"], "label": _fix_label(a, r.get("evidence") or {}, profile),
+                    "done": done, "can": can, "needs_persona": "Persona" in reason,
+                    "reason": "" if done else reason})
+    return out
 
 
 def feed(uid):
@@ -456,6 +738,8 @@ def feed(uid):
     s = _latest_summary(uid) or {"results": []}
     store = _store(uid)
     items, needs_you = [], []
+    profile = _read(_dir(uid, "data", "profile.json"), {}) or {}
+    scams = st.marked_scam(store)
     for r in s["results"]:
         rows = {row["action_key"]: row for row in st.actions_for(store, r["threat"])}
         # What Guardian has done about this threat, from the store (a later run only says "already done").
@@ -473,7 +757,10 @@ def feed(uid):
                 needs_you.append({"key": a["key"], "ask": a["ask"], "threat": r["threat"],
                                   "stuck": bool(a.get("stuck"))})
         items.append({"threat": r["threat"], "kind": r["kind"], "severity": r["severity"], "summary": r["summary"],
-                      "did": did, "would": would, "waiting": waiting, "steps": steps, "marked_real": bool(r.get("marked_real")) or bool(undone)})
+                      "did": did, "would": would, "waiting": waiting, "steps": steps, "marked_real": bool(r.get("marked_real")) or bool(undone),
+                      # For "Yes, it's a scam": what Guardian can still do, and the person's own steps.
+                      "confirmed_scam": r["threat"] in scams, "fixes": _fixes(r, rows, profile),
+                      "how": respond.steps_for(r["kind"], r.get("evidence") or {}, profile)})
     return {
         "name": meta.get("protected_name") or meta["name"], "mode": meta["mode"], "paused": meta["paused"],
         "family": meta.get("family"), "data_source": meta["data_source"], "last_run": meta.get("last_run"),
@@ -485,10 +772,28 @@ def feed(uid):
     }
 
 
-def approve(uid, action_key):
-    """Say yes to one held action, then check at once so it runs now."""
+def confirm_scam(uid, threat_key):
+    """"Yes, it's a scam": remember it. Nothing runs yet: each fix waits for its own yes (approve)."""
     with _lock(uid):
-        held = {n["key"] for n in feed(uid)["needs_you"]}
+        item = next((i for i in feed(uid)["items"] if i["threat"] == threat_key), None)
+        if not item:
+            raise AppError("That item is no longer on your list.")
+        store = _store(uid)
+        if item["marked_real"] or threat_key in st.marked_real(store):
+            raise AppError("You said this one was real. Guardian has left it alone.")
+        st.mark_scam(store, threat_key, _now())
+
+
+def approve(uid, action_key):
+    """Say yes to one held action, then check at once so it runs now.
+
+    That is either something Guardian asked about (needs_you), or a fix for a threat the person has
+    confirmed is a scam.
+    """
+    with _lock(uid):
+        f = feed(uid)
+        held = {n["key"] for n in f["needs_you"]}
+        held |= {x["key"] for i in f["items"] if i["confirmed_scam"] for x in i["fixes"] if x["can"]}
         if action_key not in held:
             raise AppError("That request is no longer waiting for you.")
         st.approve(_store(uid), action_key, _now())

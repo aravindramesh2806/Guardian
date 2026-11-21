@@ -25,7 +25,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+if __name__ == "__main__":
+    # Run directly: read .env (Persona secret, origin, mail and push settings) before any module reads the
+    # environment, like the agent and the Persona sidecar do. Set variables still win. Tests import this
+    # module and keep their own environment.
+    from agent.run import load_env  # noqa: E402
+    load_env()
+
 import core  # noqa: E402
+import demo  # noqa: E402
 import gmail  # noqa: E402
 from webauthn import (generate_authentication_options, generate_registration_options,  # noqa: E402
                       options_to_json, verify_authentication_response, verify_registration_response)
@@ -90,14 +98,34 @@ def _new_session(uid, stepped_up=True):
 
 # ---------- passkey ceremonies ----------
 
-def register_begin(body):
+signup_times = {}  # client address -> recent sign-up starts (simple abuse limit)
+SIGNUPS_PER_HOUR = int(os.environ.get("GUARDIAN_SIGNUPS_PER_HOUR", "10"))
+
+
+def _signup_allowed(ip):
+    now = time.time()
+    with _state:
+        recent = [t for t in signup_times.get(ip, []) if now - t < 3600]
+        if len(recent) >= SIGNUPS_PER_HOUR:
+            signup_times[ip] = recent
+            return False
+        signup_times[ip] = recent + [now]
+        return True
+
+
+def register_begin(body, ip="?"):
     name = core._clean_name(body.get("name"))
+    email = core.clean_email(body.get("email"))
+    if core.email_in_use(email):
+        raise core.AppError("That email already has a Guardian account. Sign in instead.")
+    if not _signup_allowed(ip):
+        raise core.AppError("Too many sign-ups from here. Please try again later.")
     user_id = secrets.token_bytes(16)
     opts = generate_registration_options(
         rp_id=RP_ID, rp_name="Guardian", user_name=name, user_id=user_id, user_display_name=name,
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.REQUIRED, user_verification=UserVerificationRequirement.REQUIRED))
-    fid = _new_flow(challenge=opts.challenge, purpose="register", name=name)
+    fid = _new_flow(challenge=opts.challenge, purpose="register", name=name, email=email)
     return {"flow": fid, "options": json.loads(options_to_json(opts))}
 
 
@@ -109,7 +137,8 @@ def register_finish(body):
     except Exception:
         raise core.AppError("That passkey could not be checked. Please try again.")
     cred = {"id": b64u(v.credential_id), "public_key": b64u(v.credential_public_key), "sign_count": v.sign_count}
-    uid = core.create_user(flow["name"], cred)
+    uid = core.create_user(flow["name"], cred, flow["email"])
+    core.issue_code(uid)
     return uid
 
 
@@ -183,7 +212,7 @@ def persona_finish(uid, fid):
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
-                ".webmanifest": "application/manifest+json"}
+                ".webmanifest": "application/manifest+json", ".png": "image/png"}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -255,6 +284,14 @@ class Handler(BaseHTTPRequestHandler):
                     return v, s
         return None, None
 
+    def _client_ip(self):
+        # Behind a tunnel every request comes from 127.0.0.1: trust the tunnel's header only when told to.
+        if os.environ.get("GUARDIAN_TRUST_PROXY") == "1":
+            fwd = self.headers.get("CF-Connecting-IP") or (self.headers.get("X-Forwarded-For") or "").split(",")[0]
+            if fwd.strip():
+                return fwd.strip()
+        return self.client_address[0]
+
     def _body(self):
         if self.headers.get("Origin") != ORIGIN:
             raise PermissionError("bad origin")
@@ -270,19 +307,32 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/api/me":
             _, s = self._session()
+            demo_on = demo.enabled(ORIGIN)
             if not s:
-                return self._send(200, {"signed_in": False})
+                return self._send(200, {"signed_in": False, "demo_login": demo_on})
             try:
                 meta = core.load(s["uid"])
             except core.AppError:
-                return self._send(200, {"signed_in": False}, cookie="")
+                return self._send(200, {"signed_in": False, "demo_login": demo_on}, cookie="")
             return self._send(200, {"signed_in": True, "name": meta["name"], "setup_done": meta["setup_done"],
-                                    "stepped_up": time.time() - s["stepped_up_at"] < STEP_UP_SECONDS})
+                                    "demo": bool(meta.get("demo_username")), "demo_login": demo_on,
+                                    "email": meta.get("email"), "email_verified": bool(meta.get("email_verified")),
+                                    "stepped_up": time.time() - s["stepped_up_at"] < STEP_UP_SECONDS,
+                                    # The setup screens show whether the Persona check is done and Gmail is offered.
+                                    "verified": core.verification(s["uid"]), "gmail_available": gmail.configured()})
         if path == "/api/feed":
             _, s = self._session()
             if not s:
                 return self._send(401, {"error": "Please sign in."})
+            if not core.load(s["uid"]).get("email_verified"):
+                return self._send(403, {"error": "Please confirm your email first.", "verify_email": True})
             return self._send(200, core.feed(s["uid"]))
+        if path == "/api/push/key":
+            try:
+                import push
+                return self._send(200, {"key": push.public_key()})
+            except ImportError:
+                return self._send(400, {"error": "Alerts aren't set up on this server."})
         if path == "/oauth/google/start":
             _, s = self._session()
             if not s:
@@ -347,7 +397,7 @@ class Handler(BaseHTTPRequestHandler):
         token, s = self._session()
         try:
             if path == "/api/register/begin":
-                return self._send(200, register_begin(body))
+                return self._send(200, register_begin(body, self._client_ip()))
             if path == "/api/register/finish":
                 uid = register_finish(body)
                 return self._send(200, {"ok": True}, cookie=_new_session(uid))
@@ -355,6 +405,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, login_begin())
             if path == "/api/login/finish":
                 uid = login_finish(body, "login")
+                return self._send(200, {"ok": True}, cookie=_new_session(uid))
+            if path == "/api/demo/login":
+                # Demo account only, on localhost only, and only with GUARDIAN_DEMO_LOGIN=1 (app/demo.py).
+                if not demo.enabled(ORIGIN):
+                    return self._send(404, {"error": "not found"})
+                uid = demo.login(body.get("username"), body.get("pin"))
                 return self._send(200, {"ok": True}, cookie=_new_session(uid))
             if not s:
                 return self._send(401, {"error": "Please sign in."})
@@ -370,8 +426,25 @@ class Handler(BaseHTTPRequestHandler):
                 with _state:
                     s["stepped_up_at"] = time.time()
                 return self._send(200, {"ok": True})
+            if path == "/api/stepup/pin":
+                # The demo account has no passkey: its PIN confirms risky changes instead.
+                if not demo.enabled(ORIGIN):
+                    return self._send(404, {"error": "not found"})
+                demo.confirm(uid, body.get("pin"))
+                with _state:
+                    s["stepped_up_at"] = time.time()
+                return self._send(200, {"ok": True})
+            if path == "/api/email/verify":
+                core.verify_code(uid, body.get("code"))
+                return self._send(200, {"ok": True})
+            if path == "/api/email/resend":
+                core.issue_code(uid)
+                return self._send(200, {"ok": True})
+            if not core.load(uid).get("email_verified") and path != "/api/delete":
+                return self._send(403, {"error": "Please confirm your email first.", "verify_email": True})
             stepped_up = time.time() - s["stepped_up_at"] < STEP_UP_SECONDS
-            needs_step_up = path in ("/api/approve", "/api/already-done", "/api/delete", "/api/gmail/disconnect") or (
+            needs_step_up = path in ("/api/approve", "/api/already-done", "/api/delete", "/api/gmail/disconnect",
+                                    "/api/family/invite") or (
                 path in ("/api/mode", "/api/setup") and body.get("mode") == "act" and core.load(uid)["mode"] != "act")
             if needs_step_up and not stepped_up:
                 return self._send(403, {"error": "Please confirm it's you first.", "step_up": True})
@@ -384,11 +457,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, persona_begin(uid))
             if path == "/api/persona/finish":
                 return self._send(200, {"result": persona_finish(uid, body.get("flow"))})
+            if path == "/api/push/subscribe":
+                core.add_push(uid, body.get("subscription"))
+                sent = core.notify(uid, "Guardian", "Alerts are on for this device.")
+                return self._send(200, {"ok": True, "test_sent": sent})
             if path == "/api/accounts":
                 core.set_accounts(uid, body.get("accounts") or [])
                 return self._send(200, core.feed(uid))
             if path == "/api/gmail/disconnect":
                 core.disconnect_gmail(uid)
+                return self._send(200, core.feed(uid))
+            if path == "/api/family/invite":
+                core.send_invite(uid)
                 return self._send(200, core.feed(uid))
             if path == "/api/family/yes":
                 core.family_said_yes(uid)
@@ -407,6 +487,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/real":
                 undone = core.mark_real(uid, str(body.get("threat") or ""))
                 return self._send(200, {"undone": undone, "feed": core.feed(uid)})
+            if path == "/api/scam":
+                # Only records the person's answer. Each fix still needs its own yes (and Face ID) via /api/approve.
+                core.confirm_scam(uid, str(body.get("threat") or ""))
+                return self._send(200, core.feed(uid))
             if path == "/api/pause":
                 core.set_paused(uid, bool(body.get("paused")))
                 return self._send(200, core.feed(uid))
@@ -438,6 +522,11 @@ def serve(port=PORT, worker=True):
 if __name__ == "__main__":
     httpd, stop = serve()
     print("Guardian on %s (checks every %ds)" % (ORIGIN, core.CHECK_EVERY))
+    if demo.enabled(ORIGIN):
+        demo.ensure_user()
+        print("Demo sign-in is on for username %r (PIN from GUARDIAN_DEMO_PIN, see app/demo.py)" % demo.username())
+    elif os.environ.get("GUARDIAN_DEMO_LOGIN") == "1":
+        print("Demo sign-in stays off: it only works when the app runs on localhost.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -33,11 +33,11 @@ everywhere gets real users protected fastest.
 
 | Step | What the person sees | What happens underneath |
 |---|---|---|
-| 1. Who is this for? | "Me" or "Someone in my family" | Family setup lets an adult child set things up, but the protected person must be present to consent in step 2 |
+| 1. Who is this for? | "Me" or "Someone I look out for" | Anyone can set it up for a parent, partner, teenager or friend, but the protected person must be present to consent in step 2 |
 | 2. Create your account | "Use Face ID to sign in". No password | Passkey (WebAuthn), bound to the device. Then a Persona `live_human_presence` check |
 | 3. Connect your email | One "Connect Gmail" button, then a plain list: "Guardian will read new emails to spot scams. It will never send email or delete anything." | Google OAuth with the smallest scopes (section 3). Token encrypted at rest |
 | 4. Add someone you trust (optional) | "Who should we tell if a scammer targets you?" | That person gets a text: "Rose added you. Reply YES to agree." Nothing goes to them until they say yes |
-| 5. How should Guardian help? | Two big choices: "Just tell me" (the default) or "Act for me, then tell me" | Sets the gates for this person. Senior mode is suggested for 65+ |
+| 5. How should Guardian help? | Two big choices: "Just tell me" (the default) or "Act for me, then tell me" | Sets the gates for this person. Extra-care mode is an opt-in for anyone who wants a closer watch |
 | 6. See it work | A sample alert arrives: "This is what a Guardian alert looks like." | Proves notifications reach them, before anything real happens |
 
 Rules that keep it a one-time setup:
@@ -171,7 +171,7 @@ follow when the call and text filters are needed.
 
 ## 6. Proving it works before real data ("dummy tests")
 
-1. **Synthetic people:** two to three fictional users (a senior, a busy professional) with 30 days of
+1. **Synthetic people:** two to three fictional users of different ages and lives (a retiree, a busy professional) with 30 days of
    labelled email and texts. That means real-looking scams *and* look-alike legitimate messages (a real
    bank notice, a real delivery). All on `.example` domains and `555` numbers.
 2. **Quality bar:** on the labelled set, **zero automatic actions on legitimate messages**, scam recall
@@ -190,7 +190,7 @@ follow when the call and text filters are needed.
 6. **30-day soak:** run the scheduler over the synthetic month. No repeated alerts, alert volume within
    the budget, no growth in errors.
 7. **Enrollment dry run:** a scripted walk-through timed to under 5 minutes, then a usability test with
-   3 to 5 people, including someone over 65.
+   3 to 5 people across ages and comfort with tech (a student to someone over 65).
 
 ### Results on 2026-11-20 (`python3 agent/evaluate.py`, `--holdout`)
 
@@ -212,7 +212,7 @@ What it means:
 - **Next for recall:** a language model on every message from an unknown sender (SIE, raise-only, as L1
   requires), measured on the held-out set and a fresh set written by someone who has not read the rules.
   Real recall is only known from shadow mode on real mail.
-- Known noise still in the dev set: a grandson's "I got you a gift card" call (a senior-mode alert), and
+- Known noise still in the dev set: a grandson's "I got you a gift card" call (an extra-care-mode alert), and
   parking or cafe charges with no receipt (an ask, not a lock).
 
 ### Then: testing on yourself
@@ -227,7 +227,7 @@ What it means:
 | Item | Needed for | When |
 |---|---|---|
 | Decision: PWA first? | Everything after the demo | Now |
-| Decision: first user is you, or a family member? | Enrollment flow and senior defaults | Now |
+| Decision: first user is you, or someone you look out for? | Enrollment flow and defaults | Now |
 | Persona sandbox key | Persona live (P0) | When you have it |
 | Google Cloud project with the Gmail API, OAuth consent screen in testing mode, your address as a test user | Gmail connector | Before the shadow-mode test |
 | A domain with HTTPS | Passkeys and web push need a real origin | Before enrollment works on a phone |
@@ -249,7 +249,10 @@ Nothing in this table blocks the dummy tests. Those can start now on fictional d
 - Done since: 3 (Gmail connector: read-only sign-in with PKCE, sync, token refresh, revoke, shadow mode;
   tested against a fake Google, waiting for the real Google project), 7 (per-person encryption sealed by a
   master key, 30-day retention of mail and logs, crypto-shredding on delete, privacy page).
-- Open: 8 (SPF, DKIM and DMARC: needs real email headers), push while the app is closed (HTTPS), real SMS.
+- Done since: open sign-up with email confirmation (hashed 6-digit code, limits, unconfirmed accounts deleted
+  after 24 hours, one account per email, per-address sign-up limit); Web Push while the app is closed
+  (encrypted end to end, a count only, never content), verified by decrypting a real push in a test.
+- Open: 8 (SPF, DKIM and DMARC: needs real email headers), real SMS; a public HTTPS address (tunnel).
 
 ## 8. Order of work
 

@@ -133,6 +133,12 @@ def handle(threat, ctx):
                 result = respond.act(action, threat, ctx["profile"], ctx["outbox_dir"])
             except Exception as e:  # a service outage must not stop the run; the action retries next run
                 result = {"status": respond.FAILED, "reason": "%s: %s" % (type(e).__name__, str(e)[:120])}
+            if action["type"] == "alert" and respond.is_done(result["status"]) and ctx.get("on_alert"):
+                # Tell the person now, before Guardian blocks, quarantines or locks anything (alerts come first).
+                try:
+                    ctx["on_alert"](threat)
+                except Exception as e:  # a failed push must never stop protection
+                    log.event("act", "push_failed", {}, {"error": type(e).__name__}, threat["key"])
         else:
             result = respond.held(action, threat, ctx["profile"], reason)
             if action["key"] in ctx.get("approved", ()):
@@ -170,7 +176,8 @@ def make_ask(store, now, budget):
     return ask
 
 
-def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None, user_id="demo-user"):
+def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate_check=None, user_id="demo-user",
+        on_alert=None):
     run_id = "run-" + time.strftime("%Y%m%d-%H%M%S") + "-%04d" % (int(time.time() * 1000) % 10000)
     run_dir = run_dir or os.path.join(ROOT, "runs")
     ctx = {
@@ -181,6 +188,7 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
         "outbox_dir": outbox_dir or os.path.join(ROOT, "outbox"),
         "profile": detect.load("profile.json", data_dir),
         "verification": detect.load("verification.json", data_dir),
+        "on_alert": on_alert,  # called with each threat the moment its alert goes out (the app pushes it)
     }
     stored_claim = st.claim(ctx["store"])
     if stored_claim:  # a claim kept in the store wins over the file

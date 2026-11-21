@@ -15,19 +15,21 @@ python3 -m http.server 8000 -d web
 ```
 
 Open two tabs: <http://localhost:8000/report.html> and <http://localhost:8000/live.html>. Keep a terminal
-ready for the second run, and the Statsig console open on `senior_protection`.
+ready for the second run, and the Statsig console open on `senior_protection` (extra-care mode).
 
 ## 0:00 – 0:25 The problem
-"People aged 60 and over reported about $7.7 billion lost to fraud in 2025, roughly 60% more than the
-year before, according to AARP's summary of the FBI's internet crime report. The scams come by phone,
-text and email, and the agents people use today help them shop and schedule, not protect them."
+"Americans reported about $20.9 billion lost to internet crime in 2025, 26% more than the year before,
+according to the FBI's IC3 report. If your email, phone number and card are out on the internet, you are a
+target, at any age. The scams come by phone, text and email, and the agents people use today help them
+shop and schedule, not protect them."
 
-"Meet Rose, 78. Her daughter Sam worries about her. Rose set up Guardian once, and it has watched over
+"Guardian is for anyone with a digital identity. Today we follow one of our test people: meet Rose, 78.
+Her daughter Sam is her trusted contact. Rose set up Guardian once, and it has watched over
 her ever since."
 
 ## 0:25 – 1:05 One morning, nine threats (report tab)
-Point at the demo-mode banner and "4 critical · 4 high · 1 medium", then read the brief: "9 new threats today. 5 stopped for you, 1 needs you, and your family was told
-about 3."
+Point at the demo-mode banner and "4 critical · 4 high · 1 medium", then read the brief: "9 new threats today. 5 stopped
+for you, 1 needs you, and someone you trust was told about 3."
 - A voicemail that shows "Example Bank" but comes from the wrong number, asking her to move money to a
   "safe account" and read out a code. **Blocked. Rose warned. Sam told.**
 - "Grandma, it's me, I need bail, buy gift cards, don't tell mom." **Blocked. Sam told.**
@@ -43,8 +45,9 @@ Scroll to a scam voicemail: the cards show the exact message Rose got (with step
 ## 1:05 – 1:40 And when the scammer calls live (live tab, press Replay)
 "Guardian doesn't only clean up afterwards." The island reads *Guardian is listening*. After "Grandma,
 it's me" the score turns yellow. At "bail money, don't tell mom" it turns red: **Hang up. They are
-asking for money or gift cards.** That lands nine seconds *before* the gift-card ask. It ends with
-*Blocked. Sam (daughter) was told.*
+asking for money or gift cards.** That lands nine seconds *before* the gift-card ask. Guardian warns
+first, then offers the choice: tap **Block this number and hang up**, and it ends with *Blocked. Sam
+(daughter) was told.* ("I know this caller" leaves it unblocked.)
 
 ## 1:40 – 2:25 Why you can trust it (report tab, open one threat's audit trail)
 - The reasons: "caller ID says Example Bank, but the real number is +1-555-0199".
@@ -63,7 +66,7 @@ dispute filed." The gate that holds disputes stays on; Rose approved this one, a
 ## Live beat, if time allows: a new scam arrives on stage
 "While we've been talking, Rose just got a text." Run:
 `python3 agent/run.py --incoming demo/incoming_text.json && python3 agent/brief.py` and refresh.
-The brief reads "1 new threat today. 1 stopped for you, nothing needs you, and your family was told about 1":
+The brief reads "1 new threat today. 1 stopped for you, nothing needs you, and someone you trust was told about 1":
 a fake unpaid-toll text with a pay link, blocked, Rose warned, Sam told. Run it once more: nothing repeats.
 
 ## Optional beat: complete the loop (Amplitude + Statsig)
@@ -72,7 +75,7 @@ Turn `senior_protection` off in Statsig, start fresh and rerun: the borderline g
 Show both groups in Amplitude (every event carries the gate values), turn it back on.
 
 ## 2:45 – 3:00 Close
-"Set it up once. Guardian protects you, tells your family, and shows its work. Next: real Gmail in
+"Set it up once. Guardian protects your identity, tells someone you trust, and shows its work. Next: real Gmail in
 shadow mode, then live calls. Built with Amplitude, Statsig, SingleStore and Persona."
 (Name Superlinked only once SIE is actually wired up.)
 
