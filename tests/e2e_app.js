@@ -20,6 +20,8 @@ let page = null, pageErrors = [];  // kept outside so a failure can save what wa
     if (m.type() !== 'error') return;
     const url = (m.location() && m.location().url) || '';
     if (noSidecar && /status of 400/.test(m.text()) && url.endsWith('/api/persona/begin')) return;
+    if (/status of 400/.test(m.text()) && url.endsWith('/api/email/verify')) return;  // the deliberately wrong code
+    if (/does not support the Push API in incognito/.test(m.text())) return;  // headless Chromium has no push service
     errors.push(m.text() + (url ? ' (' + url + ')' : ''));
   });
   const cdp = await ctx.newCDPSession(p);
@@ -60,8 +62,13 @@ let page = null, pageErrors = [];  // kept outside so a failure can save what wa
   await tap('Continue');
   await p.getByText('Step 6 of 6').waitFor();
   await tap('Send me a practice alert');
-  await tap('Yes, I got it');
-  console.log('2 setup done, practice alert sent and confirmed');
+  // Headless Chromium can't show the notification, so the app offers to go on without alerts: either way is fine here.
+  const gotIt = p.getByRole('button', { name: 'Yes, I got it', exact: true });
+  const without = p.getByRole('button', { name: 'Continue without alerts for now', exact: true });
+  await gotIt.or(without).first().waitFor();
+  const shown = await gotIt.isVisible();
+  await (shown ? gotIt : without).click();
+  console.log('2 setup done, practice alert', shown ? 'sent and confirmed' : "couldn't show here, continued without alerts");
 
   await p.getByText('Hi, Rose').waitFor();
   await shot('home');
