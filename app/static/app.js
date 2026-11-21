@@ -491,7 +491,9 @@ const SETUP = {
       if (!canNotify) return missing();
       // Best: turn on real alerts for this device; the server sends a test push. Otherwise a local practice alert.
       let pushed = false;
-      try { pushed = await turnOnAlerts(); } catch (e) { pushed = false; }
+      // A browser with no reachable push service can leave subscribe() pending forever: give up after 8s.
+      const gaveUp = new Promise((resolve) => setTimeout(() => resolve(false), 8000));
+      try { pushed = await Promise.race([turnOnAlerts(), gaveUp]); } catch (e) { pushed = false; }
       if (!pushed) {
         if (Notification.permission === "default") await Notification.requestPermission();
         const a = await call("/api/test-alert", {});
