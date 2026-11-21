@@ -1,10 +1,12 @@
 // Browser test of the whole app with a virtual passkey (Chromium WebAuthn emulation).
 // Start the app with an empty users folder, then: node tests/e2e_app.js <folder for screenshots> <users folder>
-// e.g. GUARDIAN_USERS_DIR=/tmp/g-e2e .venv/bin/python app/server.py &  then  node tests/e2e_app.js /tmp
+// e.g. GUARDIAN_USERS_DIR=/tmp/g-e2e .venv/bin/python app/server.py &  then  node tests/e2e_app.js /tmp /tmp/g-e2e
+// (the users folder can also come from GUARDIAN_USERS_DIR; the sign-up code is read from its dev_mail.log)
 // Persona's widget doesn't run headless, so the trusted person stays "not invited" here (tests/test_app.py
 // covers the invite itself).
 const { chromium } = require('playwright');
-const dir = process.argv[2], usersDir = process.argv[3];
+const dir = process.argv[2], usersDir = process.argv[3] || process.env.GUARDIAN_USERS_DIR;
+if (!dir || !usersDir) { console.error('usage: node tests/e2e_app.js <screenshots folder> <users folder>'); process.exit(2); }
 const fs = require('fs');
 (async () => {
   const b = await chromium.launch();
