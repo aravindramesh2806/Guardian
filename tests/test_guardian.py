@@ -1,6 +1,7 @@
 """Guardian tests. Each test copies the sample data into a temp folder and uses a temp SQLite store."""
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -274,6 +275,37 @@ class BriefTests(Base):
         self.assertIn("Tell family: Sam (daughter) agreed to be told about serious scams", page)
         self.assertIn("File a dispute: disputes wait for your confirmation", page)
         self.assertIn("Raw events (7)", page)
+
+    def test_severity_is_ranked_not_all_high(self):
+        sev = {t["key"]: t["severity"] for t in detect.all_threats(self.data)}
+        self.assertEqual(sev["scam:c-201"], "critical")
+        self.assertEqual(sev["charge:tx-4"], "critical")
+        self.assertEqual(sev["phishing:m-101"], "high")
+        self.assertEqual(sev["suspicious:c-206"], "medium")
+        order = [detect.SEVERITY_ORDER[t["severity"]] for t in detect.all_threats(self.data)]
+        self.assertEqual(order, sorted(order))
+
+    def test_simulated_is_said_once_not_on_every_line(self):
+        s = self.run_once()
+        self.assertFalse(any("(simulated)" in l for l in brief.brief_lines(s)))
+        with open(brief.report(s, os.path.join(self.tmp, "runs"), os.path.join(self.tmp, "r.html"), client_key="")) as f:
+            page = f.read()
+        visible = re.sub(r"<details class='raw'>.*?</details>", "", page, flags=re.S)  # raw events stay verbatim
+        self.assertEqual(visible.count("simulated"), 1)
+        self.assertIn("4 critical", page)
+        self.assertIn("4 high", page)
+
+    def test_incoming_text_is_caught_on_the_next_run(self):
+        runs = os.path.join(self.tmp, "runs")
+        self.run_once()
+        runner.receive(os.path.join(os.path.dirname(SAMPLE), "demo", "incoming_text.json"), run_dir=runs)
+        s = self.run_once()
+        self.assertEqual(s["new_threats"], 1)
+        r = self.by_key(s)["scam:c-301"]
+        self.assertIn("blocked", self.status(r, "block_number"))
+        self.assertIn("told", self.status(r, "notify_trusted"))
+        self.assertTrue(brief.brief_lines(s)[0].startswith("1 new threat today"))
+        self.assertEqual(self.run_once()["new_threats"], 0)  # and it still never repeats
 
     def test_audit_trail_covers_every_threat(self):
         s = self.run_once()

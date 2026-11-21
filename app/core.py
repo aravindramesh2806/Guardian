@@ -612,7 +612,7 @@ def run_for(uid):
 
             def on_alert(threat):
                 # Called the moment a threat's alert goes out, before any block, quarantine or lock.
-                if threat["severity"] != "high" or pushed["scams"] >= MAX_SCAM_PUSHES:
+                if threat["severity"] not in ("critical", "high") or pushed["scams"] >= MAX_SCAM_PUSHES:
                     pushed["more"] += 1
                     return
                 title, body, buttons = scam_alert(threat, meta["mode"], hands_off)

@@ -1,0 +1,14 @@
+{
+  "_note": "A scam text that arrives during the demo. Fictional: 555 number, .example domain.",
+  "calls": [
+    {
+      "id": "c-301",
+      "kind": "sms",
+      "from": "+1-555-0166",
+      "caller_id": "Unknown",
+      "at": "2026-11-20T15:40:00",
+      "transcript": "Example Toll: you have an unpaid toll of $4.15. Pay today to avoid a $50 late fee: http://toll-settle.example/pay",
+      "links": ["http://toll-settle.example/pay"]
+    }
+  ]
+}

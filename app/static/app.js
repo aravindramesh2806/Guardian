@@ -43,6 +43,8 @@ function icon(name, size) {
   svg.innerHTML = PATHS[name];   // constant markup only
   return svg;
 }
+// Critical and high are both a scam or attack; medium and low are a heads up.
+const serious = (item) => item.severity === "critical" || item.severity === "high";
 function show(...nodes) {
   app.replaceChildren(el("section", { class: "screen" }, ...nodes));
   const h = app.querySelector("h1");
@@ -535,7 +537,7 @@ function hero(f) {
 
 function itemCard(it, err) {
   const tag = it.marked_real ? el("span", { class: "tag" }, "You said this was real")
-    : el("span", { class: "tag " + (it.severity === "high" ? "high" : "medium") }, it.severity === "high" ? "Scam or attack" : "Heads up");
+    : el("span", { class: "tag " + (serious(it) ? "high" : "medium") }, serious(it) ? "Scam or attack" : "Heads up");
   const card = el("div", { class: "card item", "data-threat": it.threat }, tag, el("h3", { class: "mt-s" }, it.summary));
   if (it.did.length && !it.marked_real) card.append(el("p", { class: "did" }, "Guardian: " + it.did.join(" · ")));
   if (!it.marked_real && (it.would || []).length) card.append(el("p", { class: "muted" },
@@ -610,7 +612,7 @@ function solve(threat) {
     how ? el("ol", { class: "steps-list" }, ...how.map((s) => el("li", {}, s)))
       : it.steps ? el("div", { class: "card" }, el("pre", { class: "steps" }, it.steps))
       : el("div", { class: "card" }, el("p", {}, "Nothing more for you to do. Don't reply to it or click anything in it.")),
-    fam && fam.status === "agreed" && it.severity === "high"
+    fam && fam.status === "agreed" && serious(it)
       ? el("div", { class: "mt-s" }, note("soft", "people", fam.name + " agreed to be told about serious scams like this one.")) : null,
     el("div", { class: "foot" }, el("button", { class: "btn2", onclick: back }, "Back to my Guardian")));
 }
@@ -741,7 +743,7 @@ async function home() {
     try {
       const f = await call("/api/feed");
       const fresh = f.items.filter((i) => !seenThreats.has(i.threat) && !i.marked_real);
-      fresh.forEach((i) => { seenThreats.add(i.threat); notify(i.severity === "high" ? "Guardian: scam stopped" : "Guardian: heads up", i.summary); });
+      fresh.forEach((i) => { seenThreats.add(i.threat); notify(serious(i) ? "Guardian: scam stopped" : "Guardian: heads up", i.summary); });
       if (JSON.stringify(f) !== JSON.stringify(feedCache)) {
         feedCache = f;
         if (!document.activeElement || document.activeElement === document.body) solving ? solve(solving) : render();

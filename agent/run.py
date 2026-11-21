@@ -41,6 +41,30 @@ def approve(key, run_dir=None, store=None, now=None):
     return st.approved_keys(store)
 
 
+def load_incoming(run_dir):
+    """Calls and texts that arrived during the day (--incoming). Kept beside the runs, like real new data."""
+    path = os.path.join(run_dir, "incoming.json")
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return json.load(f)
+
+
+def receive(path, run_dir=None):
+    """A new call or text arrives: add it to what Guardian will see on this and every later run."""
+    run_dir = run_dir or os.path.join(ROOT, "runs")
+    with open(path) as f:
+        new = json.load(f)
+    new = new.get("calls", []) if isinstance(new, dict) else new
+    have = load_incoming(run_dir)
+    ids = {c["id"] for c in have}
+    have += [c for c in new if c["id"] not in ids]
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "incoming.json"), "w") as f:
+        json.dump(have, f, indent=2)
+    return new
+
+
 def already_done(key, run_dir=None, store=None):
     """A run stopped part-way through `key`, the person checked, and it had happened: never run it again."""
     run_dir = run_dir or os.path.join(ROOT, "runs")
@@ -177,7 +201,8 @@ def run(data_dir=None, run_dir=None, outbox_dir=None, store=None, now=None, gate
     ctx["log"].event("gates", "check_gates", {}, ctx["flags"], "run")
     sources = {}
     ask = make_ask(ctx["store"], ctx["now"], int(os.environ.get("GUARDIAN_MODEL_BUDGET", "40")))
-    threats = detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"], sources=sources, ask=ask)
+    threats = detect.all_threats(data_dir, senior=ctx["gates"]["senior_protection"], sources=sources, ask=ask,
+                                 extra_calls=load_incoming(run_dir))
     sources["model_second_look"] = ("%d asked" % ask.used["calls"]) if ask else "off (no model configured)"
     ctx["log"].event("sources", "read_sources", {}, sources, "run")
     results = [handle(t, ctx) for t in threats]
@@ -210,8 +235,12 @@ if __name__ == "__main__":
                         "(for an action a crash left part-way: try it again)")
     parser.add_argument("--already-done", metavar="ACTION",
                         help="an action a crash left part-way did happen: record it as done, never run it again")
+    parser.add_argument("--incoming", metavar="FILE", help="a call or text arrives first, e.g. demo/incoming_text.json")
     args = parser.parse_args()
     load_env()
+    if args.incoming:
+        for c in receive(args.incoming):
+            print("New %s from %s just arrived. Running Guardian now." % (c["kind"], c["from"]))
     if args.approve:
         approve(args.approve)
         print("Approved %s. Running Guardian now." % args.approve)
@@ -219,6 +248,7 @@ if __name__ == "__main__":
         already_done(args.already_done)
         print("Recorded %s as done. Running Guardian now." % args.already_done)
     s = run()
+    print("Demo mode: every action below is simulated and written to outbox/.")
     print(json.dumps({k: v for k, v in s.items() if k != "results"}, indent=2))
     for r in s["results"]:
         print("-", r["severity"], r["summary"])

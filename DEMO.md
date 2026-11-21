@@ -6,7 +6,8 @@
 python3 agent/demo.py
 ```
 
-That resets the store (SingleStore too), runs the agent, and builds both pages. If it prints a
+That resets the store (SingleStore too), clears approvals and any `--incoming` text, runs the agent, and
+builds both pages. If it prints a
 SingleStore WARNING, run it again once SingleStore is back. Then:
 
 ```bash
@@ -27,7 +28,8 @@ Her daughter Sam is her trusted contact. Rose set up Guardian once, and it has w
 her ever since."
 
 ## 0:25 – 1:05 One morning, nine threats (report tab)
-Read the brief at the top: "9 new threats today. 5 stopped for you, 1 needs you, and someone you trust was told about 3."
+Point at the demo-mode banner and "4 critical · 4 high · 1 medium", then read the brief: "9 new threats today. 5 stopped
+for you, 1 needs you, and someone you trust was told about 3."
 - A voicemail that shows "Example Bank" but comes from the wrong number, asking her to move money to a
   "safe account" and read out a code. **Blocked. Rose warned. Sam told.**
 - "Grandma, it's me, I need bail, buy gift cards, don't tell mom." **Blocked. Sam told.**
@@ -60,6 +62,12 @@ Point at the "Needs you" box on the $389 charge, then run live:
 `python3 agent/run.py --approve dispute:tx-4 && python3 agent/brief.py` and refresh the report.
 0 new threats, nothing repeated, and only that one dispute is filed: "Done for you since then:
 dispute filed." The gate that holds disputes stays on; Rose approved this one, and the audit trail says so.
+
+## Live beat, if time allows: a new scam arrives on stage
+"While we've been talking, Rose just got a text." Run:
+`python3 agent/run.py --incoming demo/incoming_text.json && python3 agent/brief.py` and refresh.
+The brief reads "1 new threat today. 1 stopped for you, nothing needs you, and someone you trust was told about 1":
+a fake unpaid-toll text with a pay link, blocked, Rose warned, Sam told. Run it once more: nothing repeats.
 
 ## Optional beat: complete the loop (Amplitude + Statsig)
 Turn `senior_protection` off in Statsig, start fresh and rerun: the borderline gift-card voicemail
